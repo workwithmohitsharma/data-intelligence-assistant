@@ -1,0 +1,1741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+
+  <title>Internal Data Intelligence Assistant — Interactive Proposal</title>
+
+  <style>
+    :root {
+      --bg: #0a0f1c;
+      --bg2: #10182b;
+      --card: #172238;
+      --card2: #1e2b44;
+
+      --text: #f5f8ff;
+      --muted: #a5b3cc;
+
+      --cyan: #40d7ff;
+      --blue: #5781ff;
+      --purple: #975dff;
+      --green: #4ade80;
+      --yellow: #facc15;
+      --red: #f87171;
+
+      --border: #374660;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+
+      background:
+        linear-gradient(
+          135deg,
+          #0a0f1c 0%,
+          #10182b 100%
+        );
+
+      color: var(--text);
+
+      font-family:
+        Inter,
+        "Segoe UI",
+        Arial,
+        sans-serif;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: auto;
+      padding: 28px;
+    }
+
+    /* -------------------------------------------------------
+       HERO
+       ------------------------------------------------------- */
+
+    .hero {
+      padding: 28px;
+
+      border:
+        1px solid var(--border);
+
+      border-radius: 22px;
+
+      background:
+        rgba(
+          23,
+          34,
+          56,
+          0.9
+        );
+
+      box-shadow:
+        0 20px 60px
+        rgba(
+          0,
+          0,
+          0,
+          0.25
+        );
+    }
+
+    .badge {
+      display: inline-block;
+
+      padding:
+        7px
+        10px;
+
+      border-radius:
+        999px;
+
+      background:
+        var(--purple);
+
+      font-size:
+        12px;
+
+      font-weight:
+        700;
+    }
+
+    h1 {
+      font-size:
+        44px;
+
+      line-height:
+        1.05;
+
+      margin:
+        18px
+        0
+        12px;
+    }
+
+    h2 {
+      font-size:
+        26px;
+
+      margin:
+        0
+        0
+        12px;
+    }
+
+    h3 {
+      margin:
+        0
+        0
+        8px;
+    }
+
+    p {
+      color:
+        var(--muted);
+
+      line-height:
+        1.6;
+    }
+
+    /* -------------------------------------------------------
+       NAVIGATION
+       ------------------------------------------------------- */
+
+    nav {
+      display:
+        flex;
+
+      gap:
+        10px;
+
+      flex-wrap:
+        wrap;
+
+      margin:
+        22px
+        0;
+    }
+
+    button,
+    .tab {
+      cursor:
+        pointer;
+    }
+
+    .tab {
+      border:
+        1px solid var(--border);
+
+      background:
+        var(--card);
+
+      color:
+        var(--text);
+
+      padding:
+        10px
+        14px;
+
+      border-radius:
+        12px;
+    }
+
+    .tab.active {
+      background:
+        var(--blue);
+    }
+
+    /* -------------------------------------------------------
+       PANELS
+       ------------------------------------------------------- */
+
+    .panel {
+      display:
+        none;
+    }
+
+    .panel.active {
+      display:
+        block;
+    }
+
+    /* -------------------------------------------------------
+       GRID
+       ------------------------------------------------------- */
+
+    .grid {
+      display:
+        grid;
+
+      gap:
+        16px;
+    }
+
+    .grid-4 {
+      grid-template-columns:
+        repeat(
+          4,
+          1fr
+        );
+    }
+
+    .grid-3 {
+      grid-template-columns:
+        repeat(
+          3,
+          1fr
+        );
+    }
+
+    .grid-2 {
+      grid-template-columns:
+        repeat(
+          2,
+          1fr
+        );
+    }
+
+    /* -------------------------------------------------------
+       CARDS
+       ------------------------------------------------------- */
+
+    .card {
+      background:
+        var(--card);
+
+      border:
+        1px solid var(--border);
+
+      border-radius:
+        18px;
+
+      padding:
+        18px;
+    }
+
+    .metric {
+      background:
+        var(--card2);
+
+      border:
+        1px solid var(--border);
+
+      border-radius:
+        16px;
+
+      padding:
+        16px;
+    }
+
+    .big {
+      font-size:
+        34px;
+
+      font-weight:
+        800;
+
+      color:
+        var(--cyan);
+    }
+
+    .callout {
+      margin-top:
+        16px;
+
+      background:
+        #122f40;
+
+      border:
+        1px solid var(--cyan);
+
+      border-radius:
+        16px;
+
+      padding:
+        16px;
+    }
+
+    /* -------------------------------------------------------
+       FLOW
+       ------------------------------------------------------- */
+
+    .flow {
+      display:
+        grid;
+
+      grid-template-columns:
+        repeat(
+          5,
+          1fr
+        );
+
+      gap:
+        12px;
+    }
+
+    .step {
+      background:
+        var(--card);
+
+      border:
+        1px solid var(--border);
+
+      border-radius:
+        18px;
+
+      padding:
+        18px;
+
+      min-height:
+        130px;
+    }
+
+    .num {
+      width:
+        34px;
+
+      height:
+        34px;
+
+      border-radius:
+        50%;
+
+      display:
+        grid;
+
+      place-items:
+        center;
+
+      background:
+        var(--blue);
+
+      font-weight:
+        700;
+
+      margin-bottom:
+        10px;
+    }
+
+    /* -------------------------------------------------------
+       INPUTS / BUTTONS
+       ------------------------------------------------------- */
+
+    input,
+    select {
+      width:
+        100%;
+
+      padding:
+        12px
+        14px;
+
+      border-radius:
+        12px;
+
+      border:
+        1px solid var(--border);
+
+      background:
+        var(--bg2);
+
+      color:
+        var(--text);
+
+      font-size:
+        15px;
+    }
+
+    .primary {
+      background:
+        var(--blue);
+
+      border:
+        0;
+
+      color:
+        white;
+
+      padding:
+        11px
+        15px;
+
+      border-radius:
+        12px;
+
+      font-weight:
+        700;
+    }
+
+    .secondary {
+      background:
+        transparent;
+
+      border:
+        1px solid var(--border);
+
+      color:
+        var(--text);
+
+      padding:
+        10px
+        14px;
+
+      border-radius:
+        12px;
+    }
+
+    /* -------------------------------------------------------
+       ANSWER AREA
+       ------------------------------------------------------- */
+
+    .answer {
+      margin-top:
+        14px;
+
+      background:
+        #123040;
+
+      border:
+        1px solid #285a72;
+
+      border-radius:
+        16px;
+
+      padding:
+        16px;
+    }
+
+    /* -------------------------------------------------------
+       CHART
+       ------------------------------------------------------- */
+
+    .chart {
+      height:
+        130px;
+
+      display:
+        flex;
+
+      align-items:
+        flex-end;
+
+      gap:
+        12px;
+
+      margin-top:
+        16px;
+    }
+
+    .bar {
+      flex:
+        1;
+
+      background:
+        var(--blue);
+
+      border-radius:
+        8px
+        8px
+        0
+        0;
+    }
+
+    .bar:last-child {
+      background:
+        var(--purple);
+    }
+
+    /* -------------------------------------------------------
+       ARCHITECTURE
+       ------------------------------------------------------- */
+
+    .arch {
+      display:
+        grid;
+
+      grid-template-columns:
+        repeat(
+          5,
+          1fr
+        );
+
+      gap:
+        12px;
+    }
+
+    .arch .card {
+      min-height:
+        150px;
+    }
+
+    .small {
+      font-size:
+        12px;
+    }
+
+    .footer {
+      margin-top:
+        24px;
+
+      color:
+        #71809b;
+
+      font-size:
+        12px;
+
+      text-align:
+        center;
+    }
+
+    /* -------------------------------------------------------
+       RESPONSIVE
+       ------------------------------------------------------- */
+
+    @media (
+      max-width:
+      900px
+    ) {
+
+      .grid-4,
+      .grid-3,
+      .grid-2,
+      .flow,
+      .arch {
+        grid-template-columns:
+          1fr;
+      }
+
+      h1 {
+        font-size:
+          34px;
+      }
+    }
+
+  </style>
+</head>
+
+<body>
+
+<div class="container">
+
+  <!-- =====================================================
+       HERO
+       ===================================================== -->
+
+  <section class="hero">
+
+    <span class="badge">
+      INTERNAL AI CONCEPT
+    </span>
+
+    <h1>
+      Internal Data Intelligence Assistant
+    </h1>
+
+    <p>
+      A private, governed assistant for stakeholders to ask questions,
+      understand Tableau dashboards, query approved Databricks data,
+      generate visual insights, and escalate to the right human team
+      when needed.
+    </p>
+
+  </section>
+
+
+  <!-- =====================================================
+       NAVIGATION
+       ===================================================== -->
+
+  <nav>
+
+    <button
+      class="tab active"
+      data-tab="problem">
+
+      The Problem
+
+    </button>
+
+    <button
+      class="tab"
+      data-tab="demo">
+
+      Try the Experience
+
+    </button>
+
+    <button
+      class="tab"
+      data-tab="architecture">
+
+      Architecture
+
+    </button>
+
+    <button
+      class="tab"
+      data-tab="poc">
+
+      PoC
+
+    </button>
+
+    <button
+      class="tab"
+      data-tab="value">
+
+      Why It Matters
+
+    </button>
+
+  </nav>
+
+
+  <!-- =====================================================
+       PROBLEM
+       ===================================================== -->
+
+  <section
+    id="problem"
+    class="panel active">
+
+    <div class="grid grid-4">
+
+      <div class="card">
+
+        <div class="num">
+          1
+        </div>
+
+        <h3>
+          Question arises
+        </h3>
+
+        <p>
+          “What does this KPI mean?”
+        </p>
+
+      </div>
+
+
+      <div class="card">
+
+        <div class="num">
+          2
+        </div>
+
+        <h3>
+          Find an expert
+        </h3>
+
+        <p>
+          Who owns this dashboard
+          or dataset?
+        </p>
+
+      </div>
+
+
+      <div class="card">
+
+        <div class="num">
+          3
+        </div>
+
+        <h3>
+          Book time
+        </h3>
+
+        <p>
+          Wait for availability
+          and explain the context.
+        </p>
+
+      </div>
+
+
+      <div class="card">
+
+        <div class="num">
+          4
+        </div>
+
+        <h3>
+          Repeat
+        </h3>
+
+        <p>
+          The next stakeholder
+          asks the same kind
+          of question again.
+        </p>
+
+      </div>
+
+    </div>
+
+
+    <div
+      class="grid grid-4"
+      style="margin-top:16px">
+
+      <div class="metric">
+
+        <div class="small">
+          Stakeholder speed
+        </div>
+
+        <div class="big">
+          ↓
+        </div>
+
+      </div>
+
+
+      <div class="metric">
+
+        <div class="small">
+          Meeting overhead
+        </div>
+
+        <div class="big">
+          ↑
+        </div>
+
+      </div>
+
+
+      <div class="metric">
+
+        <div class="small">
+          Repeat questions
+        </div>
+
+        <div class="big">
+          ↑
+        </div>
+
+      </div>
+
+
+      <div class="metric">
+
+        <div class="small">
+          Self-service
+        </div>
+
+        <div class="big">
+          ↓
+        </div>
+
+      </div>
+
+    </div>
+
+
+    <div class="callout">
+
+      <strong>
+        Opportunity:
+      </strong>
+
+      move repeatable questions
+      to secure self-service
+      while keeping humans available
+      for interpretation,
+      investigation and exceptions.
+
+    </div>
+
+  </section>
+
+
+  <!-- =====================================================
+       DEMO
+       ===================================================== -->
+
+  <section
+    id="demo"
+    class="panel">
+
+    <div class="grid grid-2">
+
+      <div class="card">
+
+        <h2>
+          Ask Data
+        </h2>
+
+        <p>
+          Conceptual stakeholder experience
+        </p>
+
+        <select id="question">
+
+          <option value="trend">
+            How did Product X perform
+            over the last 6 months?
+          </option>
+
+          <option value="meaning">
+            What does Conversion Rate
+            mean on this dashboard?
+          </option>
+
+          <option value="why">
+            Why did Product X decline
+            last month?
+          </option>
+
+        </select>
+
+
+        <div style="margin-top:12px">
+
+          <button
+            id="ask"
+            class="primary">
+
+            Ask assistant
+
+          </button>
+
+        </div>
+
+
+        <div
+          id="answer"
+          class="answer">
+
+          <p>
+            Choose a question
+            and run the demo.
+          </p>
+
+        </div>
+
+      </div>
+
+
+      <div class="grid">
+
+        <div class="card">
+
+          <h3>
+            Follow-up
+          </h3>
+
+          <p>
+            “Now only show Europe.”
+          </p>
+
+        </div>
+
+
+        <div class="card">
+
+          <h3>
+            Traceable
+          </h3>
+
+          <p>
+            Show source,
+            refresh time,
+            filters and confidence.
+          </p>
+
+        </div>
+
+
+        <div class="card">
+
+          <h3>
+            Human fallback
+          </h3>
+
+          <p>
+            If confidence is low,
+            route the full context
+            to internal support.
+          </p>
+
+        </div>
+
+      </div>
+
+    </div>
+
+  </section>
+
+
+  <!-- =====================================================
+       ARCHITECTURE
+       ===================================================== -->
+
+  <section
+    id="architecture"
+    class="panel">
+
+    <div class="arch">
+
+
+      <div class="card">
+
+        <div class="num">
+          1
+        </div>
+
+        <h3>
+          Stakeholder
+        </h3>
+
+        <p>
+          Secure internal web portal
+        </p>
+
+      </div>
+
+
+      <div class="card">
+
+        <div class="num">
+          2
+        </div>
+
+        <h3>
+          AI Orchestrator
+        </h3>
+
+        <p>
+          Intent,
+          context,
+          permissions
+          and tool selection
+        </p>
+
+      </div>
+
+
+      <div class="card">
+
+        <div class="num">
+          3
+        </div>
+
+        <h3>
+          Enterprise Sources
+        </h3>
+
+        <p>
+          Databricks,
+          Tableau,
+          KPI docs
+          and RAG
+        </p>
+
+      </div>
+
+
+      <div class="card">
+
+        <div class="num">
+          4
+        </div>
+
+        <h3>
+          Private LLM
+        </h3>
+
+        <p>
+          Internally hosted model;
+          no unauthorized
+          external data transfer
+        </p>
+
+      </div>
+
+
+      <div class="card">
+
+        <div class="num">
+          5
+        </div>
+
+        <h3>
+          Trusted Output
+        </h3>
+
+        <p>
+          Answer,
+          graph,
+          source,
+          confidence
+          and support
+        </p>
+
+      </div>
+
+    </div>
+
+
+    <div class="callout">
+
+      <strong>
+        Golden rule:
+      </strong>
+
+      AI can make data easier
+      to understand,
+      but it must never increase
+      the stakeholder's
+      underlying data privileges.
+
+    </div>
+
+  </section>
+
+
+  <!-- =====================================================
+       POC
+       ===================================================== -->
+
+  <section
+    id="poc"
+    class="panel">
+
+    <div class="grid grid-2">
+
+      <div>
+
+
+        <div class="card">
+
+          <h3>
+            1 Tableau dashboard
+          </h3>
+
+          <p>
+            A known,
+            high-value stakeholder
+            use case.
+          </p>
+
+        </div>
+
+
+        <div
+          class="card"
+          style="margin-top:12px">
+
+          <h3>
+            1–3 Databricks views
+          </h3>
+
+          <p>
+            Approved
+            and well-understood data.
+          </p>
+
+        </div>
+
+
+        <div
+          class="card"
+          style="margin-top:12px">
+
+          <h3>
+            10–20 real questions
+          </h3>
+
+          <p>
+            With expected answers
+            for evaluation.
+          </p>
+
+        </div>
+
+      </div>
+
+
+      <div class="card">
+
+        <span
+          class="badge"
+          style="
+            background:var(--cyan);
+            color:#071018;
+          ">
+
+          POC TEST
+
+        </span>
+
+
+        <h2 style="margin-top:16px">
+
+          Can we securely provide
+          accurate, explainable answers
+          from approved data
+          while reducing direct
+          support dependency?
+
+        </h2>
+
+
+        <div
+          class="grid grid-2"
+          style="margin-top:16px">
+
+
+          <div class="metric">
+
+            <div class="small">
+              Accuracy
+            </div>
+
+            <div class="big">
+              95%+
+            </div>
+
+          </div>
+
+
+          <div class="metric">
+
+            <div class="small">
+              Self-service
+            </div>
+
+            <div class="big">
+              65%+
+            </div>
+
+          </div>
+
+
+          <div class="metric">
+
+            <div class="small">
+              Traceability
+            </div>
+
+            <div class="big">
+              100%
+            </div>
+
+          </div>
+
+
+          <div class="metric">
+
+            <div class="small">
+              Human fallback
+            </div>
+
+            <div class="big">
+              Yes
+            </div>
+
+          </div>
+
+        </div>
+
+
+        <p class="small">
+
+          Illustrative proposal targets;
+          final thresholds should be agreed
+          during PoC design.
+
+        </p>
+
+      </div>
+
+    </div>
+
+  </section>
+
+
+  <!-- =====================================================
+       VALUE
+       ===================================================== -->
+
+  <section
+    id="value"
+    class="panel">
+
+    <div class="grid grid-3">
+
+
+      <div class="card">
+
+        <span
+          class="badge"
+          style="
+            background:var(--cyan);
+            color:#071018;
+          ">
+
+          STAKEHOLDER
+
+        </span>
+
+        <h2 style="margin-top:14px">
+
+          Answers without waiting
+
+        </h2>
+
+        <p>
+
+          Natural language,
+          contextual follow-ups,
+          graphs and links
+          to relevant analytics.
+
+        </p>
+
+      </div>
+
+
+      <div class="card">
+
+        <span class="badge">
+
+          DATA TEAM
+
+        </span>
+
+        <h2 style="margin-top:14px">
+
+          Fewer repetitive interruptions
+
+        </h2>
+
+        <p>
+
+          Spend human time
+          on difficult investigation
+          and high-value analytical work.
+
+        </p>
+
+      </div>
+
+
+      <div class="card">
+
+        <span
+          class="badge"
+          style="
+            background:var(--green);
+            color:#071018;
+          ">
+
+          ORGANIZATION
+
+        </span>
+
+        <h2 style="margin-top:14px">
+
+          Governed AI adoption
+
+        </h2>
+
+        <p>
+
+          A reusable intelligence layer
+          that keeps access,
+          sources and accountability visible.
+
+        </p>
+
+      </div>
+
+    </div>
+
+
+    <div class="callout">
+
+      <div class="small">
+
+        PROPOSED NEXT STEP
+
+      </div>
+
+
+      <h3>
+
+        Approve a focused PoC:
+        one domain,
+        one Tableau dashboard,
+        selected Databricks views
+        and 10–20 real stakeholder questions.
+
+      </h3>
+
+    </div>
+
+  </section>
+
+
+  <div class="footer">
+
+    Interactive proposal
+    • Internal Data Intelligence Assistant
+
+  </div>
+
+</div>
+
+
+<script>
+
+  /*
+   * -------------------------------------------------------
+   * TAB NAVIGATION
+   * -------------------------------------------------------
+   */
+
+  const tabs =
+    [
+      ...document.querySelectorAll(
+        ".tab"
+      )
+    ];
+
+  const panels =
+    [
+      ...document.querySelectorAll(
+        ".panel"
+      )
+    ];
+
+
+  tabs.forEach(
+
+    button => {
+
+      button.addEventListener(
+
+        "click",
+
+        () => {
+
+          /*
+           * Remove active state
+           * from all tabs
+           */
+
+          tabs.forEach(
+
+            tab => {
+
+              tab.classList.remove(
+                "active"
+              );
+
+            }
+
+          );
+
+
+          /*
+           * Hide all panels
+           */
+
+          panels.forEach(
+
+            panel => {
+
+              panel.classList.remove(
+                "active"
+              );
+
+            }
+
+          );
+
+
+          /*
+           * Activate clicked tab
+           */
+
+          button.classList.add(
+            "active"
+          );
+
+
+          /*
+           * Show corresponding section
+           */
+
+          const panelId =
+            button.dataset.tab;
+
+
+          document
+            .getElementById(
+              panelId
+            )
+            .classList
+            .add(
+              "active"
+            );
+
+        }
+
+      );
+
+    }
+
+  );
+
+
+  /*
+   * -------------------------------------------------------
+   * DEMO RESPONSES
+   * -------------------------------------------------------
+   */
+
+  const answers = {
+
+
+    trend: `
+
+      <span
+        class="badge"
+        style="
+          background:var(--green);
+          color:#071018;
+        "
+      >
+        VERIFIED
+      </span>
+
+
+      <h3
+        style="
+          margin-top:12px;
+        "
+      >
+
+        Product X is down
+        8.4% month-over-month
+
+      </h3>
+
+
+      <p>
+
+        Performance was relatively stable
+        before declining
+        in the latest month.
+
+      </p>
+
+
+      <div class="chart">
+
+        <div
+          class="bar"
+          style="height:55%"
+        ></div>
+
+        <div
+          class="bar"
+          style="height:70%"
+        ></div>
+
+        <div
+          class="bar"
+          style="height:63%"
+        ></div>
+
+        <div
+          class="bar"
+          style="height:82%"
+        ></div>
+
+        <div
+          class="bar"
+          style="height:75%"
+        ></div>
+
+        <div
+          class="bar"
+          style="height:60%"
+        ></div>
+
+      </div>
+
+
+      <p class="small">
+
+        Source:
+        Sales Performance
+
+        • Databricks
+
+        • Refreshed 18:00
+
+        • Confidence: High
+
+      </p>
+
+    `,
+
+
+    meaning: `
+
+      <span
+        class="badge"
+        style="
+          background:var(--cyan);
+          color:#071018;
+        "
+      >
+
+        BUSINESS KNOWLEDGE
+
+      </span>
+
+
+      <h3
+        style="
+          margin-top:12px;
+        "
+      >
+
+        Conversion Rate
+
+      </h3>
+
+
+      <p>
+
+        The percentage of eligible interactions
+        that result in the defined
+        conversion event
+        for this dashboard.
+
+      </p>
+
+
+      <p class="small">
+
+        Definition source:
+        KPI Catalogue
+
+        • Related view:
+        Tableau / Performance Overview
+
+        • Confidence: High
+
+      </p>
+
+    `,
+
+
+    why: `
+
+      <span class="badge">
+
+        DERIVED ANALYSIS
+
+      </span>
+
+
+      <h3
+        style="
+          margin-top:12px;
+        "
+      >
+
+        The largest observed contribution
+        came from Region West
+
+      </h3>
+
+
+      <p>
+
+        The assistant can identify
+        which segments contributed most
+        to the decline.
+
+        It should not claim a causal reason
+        unless approved evidence
+        supports that conclusion.
+
+      </p>
+
+
+      <p class="small">
+
+        Source:
+        approved Databricks view
+
+        • Interpretation boundary applied
+
+      </p>
+
+
+      <button
+        id="supportDemo"
+        class="secondary"
+      >
+
+        Request human support
+
+      </button>
+
+
+      <p
+        id="supportStatus"
+        class="small"
+      ></p>
+
+    `
+
+  };
+
+
+  /*
+   * -------------------------------------------------------
+   * ASK ASSISTANT
+   * -------------------------------------------------------
+   */
+
+  document
+    .getElementById(
+      "ask"
+    )
+    .addEventListener(
+
+      "click",
+
+      () => {
+
+
+        const question =
+          document
+            .getElementById(
+              "question"
+            )
+            .value;
+
+
+        const answerContainer =
+          document
+            .getElementById(
+              "answer"
+            );
+
+
+        /*
+         * Insert selected response
+         */
+
+        answerContainer.innerHTML =
+          answers[
+            question
+          ];
+
+
+        /*
+         * If the support button exists,
+         * attach escalation behaviour.
+         */
+
+        const supportButton =
+          document
+            .getElementById(
+              "supportDemo"
+            );
+
+
+        if (
+          supportButton
+        ) {
+
+          supportButton
+            .addEventListener(
+
+              "click",
+
+              () => {
+
+
+                document
+                  .getElementById(
+                    "supportStatus"
+                  )
+                  .textContent =
+
+                  "Concept: create an internal ticket containing "
+                  +
+                  "the stakeholder, question, conversation, "
+                  +
+                  "sources, filters and reason for escalation.";
+
+              }
+
+            );
+
+        }
+
+      }
+
+    );
+
+</script>
+
+</body>
+</html>
