@@ -2703,37 +2703,38 @@
 
         Approve a focused PoC: one domain, one Tableau dashboard,
         selected Databricks views and 10–20 real stakeholder questions.
-       `
-         Databricks notebook source
-  %md
-   📊 Compute Capacity & Cluster Monitoring
- 
-   Databricks Classic Compute Monitoring PoC
- 
-  This dashboard tells the compute story in sequence:
- 
-  1. What compute do we have?
-  2. How is compute distributed?
-  3. Which worker families are being used?
-  4. How many workers are actually running?
-  5. How long does compute run?
-  6. Which clusters are the biggest?
-  7. Which runs are the longest?
-  8. Are we approaching our capacity threshold?
 
- COMMAND ----------
+        <pre><code>&lt;
+          # Databricks notebook source
+#  %md
+#  # 📊 Compute Capacity & Cluster Monitoring
+# 
+#  ### Databricks Classic Compute Monitoring PoC
+# 
+#  This dashboard tells the compute story in sequence:
+# 
+#  1. What compute do we have?
+#  2. How is compute distributed?
+#  3. Which worker families are being used?
+#  4. How many workers are actually running?
+#  5. How long does compute run?
+#  6. Which clusters are the biggest?
+#  7. Which runs are the longest?
+#  8. Are we approaching our capacity threshold?
 
- ============================================================
- COMPUTE MONITORING DASHBOARD - CONFIGURATION
- ============================================================
+# COMMAND ----------
+
+# ============================================================
+# COMPUTE MONITORING DASHBOARD - CONFIGURATION
+# ============================================================
 
 CATALOG = "your_catalog"
 SCHEMA = "your_schema"
 
 LOOKBACK_DAYS = 30
 
- Temporary capacity threshold for the PoC.
- Replace this with the agreed real threshold/quota later.
+# Temporary capacity threshold for the PoC.
+# Replace this with the agreed real threshold/quota later.
 QUOTA_LIMIT = 500
 
 INVENTORY_VIEW = f"{CATALOG}.{SCHEMA}.v_cluster_inventory"
@@ -2748,17 +2749,17 @@ print("Schema        :", SCHEMA)
 print("Lookback Days :", LOOKBACK_DAYS)
 print("Quota Limit   :", QUOTA_LIMIT)
 
- COMMAND ----------
+# COMMAND ----------
 
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
- COMMAND ----------
+# COMMAND ----------
 
- ============================================================
- COMMON PLOTLY FORMATTING
- ============================================================
+# ============================================================
+# COMMON PLOTLY FORMATTING
+# ============================================================
 
 def format_chart(
     fig,
@@ -2798,14 +2799,14 @@ def format_chart(
         )
 
     return fig
-
- COMMAND ----------
+<!--
+# COMMAND ----------
 
 displayHTML(f"""
 <div style="
     padding:30px;
     border-radius:18px;
-    background:linear-gradient(135deg,111827,1f2937);
+    background:linear-gradient(135deg,#111827,#1f2937);
     color:white;
     margin-bottom:25px;
 ">
@@ -2821,7 +2822,7 @@ displayHTML(f"""
     <div style="
         margin-top:8px;
         font-size:16px;
-        color:d1d5db;
+        color:#d1d5db;
     ">
         Databricks Classic Compute Monitoring PoC
     </div>
@@ -2836,7 +2837,7 @@ displayHTML(f"""
         <span style="
             padding:7px 13px;
             border-radius:20px;
-            background:374151;
+            background:#374151;
             font-size:13px;
         ">
             Reporting Window: Last {LOOKBACK_DAYS} Days
@@ -2845,7 +2846,7 @@ displayHTML(f"""
         <span style="
             padding:7px 13px;
             border-radius:20px;
-            background:374151;
+            background:#374151;
             font-size:13px;
         ">
             Classic Job + Reusable Compute
@@ -2854,7 +2855,7 @@ displayHTML(f"""
         <span style="
             padding:7px 13px;
             border-radius:20px;
-            background:374151;
+            background:#374151;
             font-size:13px;
         ">
             Worker-Level Capacity Monitoring
@@ -2865,7 +2866,7 @@ displayHTML(f"""
 </div>
 """)
 
- COMMAND ----------
+# COMMAND ----------
 
 displayHTML("""
 <div style="
@@ -2882,7 +2883,7 @@ displayHTML("""
 
     <div style="
         margin-top:5px;
-        color:6b7280;
+        color:#6b7280;
         font-size:15px;
     ">
         What clusters do we have, where are they,
@@ -2892,7 +2893,7 @@ displayHTML("""
 </div>
 """)
 
- COMMAND ----------
+# COMMAND ----------
 
 cluster_summary = spark.sql(f"""
 SELECT
@@ -2924,7 +2925,7 @@ job_clusters = cluster_summary["job_clusters"] or 0
 dedicated_clusters = cluster_summary["dedicated_clusters"] or 0
 workspace_count = cluster_summary["workspace_count"] or 0
 
- COMMAND ----------
+# COMMAND ----------
 
 displayHTML(f"""
 <div style="
@@ -2937,11 +2938,11 @@ displayHTML(f"""
     <div style="
         padding:22px;
         border-radius:15px;
-        border:1px solid e5e7eb;
+        border:1px solid #e5e7eb;
         background:white;
     ">
         <div style="
-            color:6b7280;
+            color:#6b7280;
             font-size:12px;
             font-weight:600;
         ">
@@ -2960,11 +2961,11 @@ displayHTML(f"""
     <div style="
         padding:22px;
         border-radius:15px;
-        border:1px solid e5e7eb;
+        border:1px solid #e5e7eb;
         background:white;
     ">
         <div style="
-            color:6b7280;
+            color:#6b7280;
             font-size:12px;
             font-weight:600;
         ">
@@ -2983,11 +2984,11 @@ displayHTML(f"""
     <div style="
         padding:22px;
         border-radius:15px;
-        border:1px solid e5e7eb;
+        border:1px solid #e5e7eb;
         background:white;
     ">
         <div style="
-            color:6b7280;
+            color:#6b7280;
             font-size:12px;
             font-weight:600;
         ">
@@ -3006,11 +3007,11 @@ displayHTML(f"""
     <div style="
         padding:22px;
         border-radius:15px;
-        border:1px solid e5e7eb;
+        border:1px solid #e5e7eb;
         background:white;
     ">
         <div style="
-            color:6b7280;
+            color:#6b7280;
             font-size:12px;
             font-weight:600;
         ">
@@ -3029,7 +3030,7 @@ displayHTML(f"""
 </div>
 """)
 
- COMMAND ----------
+# COMMAND ----------
 
 inventory_df = spark.sql(f"""
 SELECT
@@ -3054,7 +3055,7 @@ ORDER BY
 
 display(inventory_df)
 
- COMMAND ----------
+# COMMAND ----------
 
 cluster_type_pd = spark.sql(f"""
 SELECT
@@ -3084,7 +3085,7 @@ fig = format_chart(
 
 fig.show()
 
- COMMAND ----------
+# COMMAND ----------
 
 workspace_pd = spark.sql(f"""
 SELECT
@@ -3123,7 +3124,7 @@ fig = format_chart(
 
 fig.show()
 
- COMMAND ----------
+# COMMAND ----------
 
 displayHTML("""
 <div style="
@@ -3140,7 +3141,7 @@ displayHTML("""
 
     <div style="
         margin-top:5px;
-        color:6b7280;
+        color:#6b7280;
         font-size:15px;
     ">
         Which worker families are being consumed,
@@ -3150,7 +3151,7 @@ displayHTML("""
 </div>
 """)
 
- COMMAND ----------
+# COMMAND ----------
 
 family_pd = spark.sql(f"""
 SELECT
@@ -3190,7 +3191,7 @@ fig = format_chart(
 
 fig.show()
 
- COMMAND ----------
+# COMMAND ----------
 
 worker_usage_pd = spark.sql(f"""
 SELECT
@@ -3233,7 +3234,7 @@ fig = format_chart(
 
 fig.show()
 
- COMMAND ----------
+# COMMAND ----------
 
 daily_instances_pd = spark.sql(f"""
 WITH daily_usage AS (
@@ -3289,7 +3290,7 @@ fig = format_chart(
 
 fig.show()
 
- COMMAND ----------
+# COMMAND ----------
 
 displayHTML("""
 <div style="
@@ -3306,7 +3307,7 @@ displayHTML("""
 
     <div style="
         margin-top:5px;
-        color:6b7280;
+        color:#6b7280;
         font-size:15px;
     ">
         How long do jobs run, and how long do reusable
@@ -3316,7 +3317,7 @@ displayHTML("""
 </div>
 """)
 
- COMMAND ----------
+# COMMAND ----------
 
 job_average_pd = spark.sql(f"""
 SELECT
@@ -3354,7 +3355,7 @@ fig = format_chart(
 
 fig.show()
 
- COMMAND ----------
+# COMMAND ----------
 
 dedicated_average_pd = spark.sql(f"""
 SELECT
@@ -3399,7 +3400,7 @@ fig = format_chart(
 
 fig.show()
 
- COMMAND ----------
+# COMMAND ----------
 
 displayHTML("""
 <div style="
@@ -3416,7 +3417,7 @@ displayHTML("""
 
     <div style="
         margin-top:5px;
-        color:6b7280;
+        color:#6b7280;
         font-size:15px;
     ">
         Which clusters reach the largest worker footprint,
@@ -3426,7 +3427,7 @@ displayHTML("""
 </div>
 """)
 
- COMMAND ----------
+# COMMAND ----------
 
 biggest_clusters_pd = spark.sql(f"""
 WITH minute_usage AS (
@@ -3521,7 +3522,7 @@ fig = format_chart(
 
 fig.show()
 
- COMMAND ----------
+# COMMAND ----------
 
 longest_jobs_pd = spark.sql(f"""
 SELECT
@@ -3577,7 +3578,7 @@ fig = format_chart(
 
 fig.show()
 
- COMMAND ----------
+# COMMAND ----------
 
 longest_dedicated_pd = spark.sql(f"""
 SELECT
@@ -3643,7 +3644,7 @@ fig = format_chart(
 
 fig.show()
 
- COMMAND ----------
+# COMMAND ----------
 
 displayHTML("""
 <div style="
@@ -3660,7 +3661,7 @@ displayHTML("""
 
     <div style="
         margin-top:5px;
-        color:6b7280;
+        color:#6b7280;
         font-size:15px;
     ">
         Are observed worker levels approaching the
@@ -3670,7 +3671,7 @@ displayHTML("""
 </div>
 """)
 
- COMMAND ----------
+# COMMAND ----------
 
 quota_pd = spark.sql(f"""
 WITH observed_usage AS (
@@ -3743,7 +3744,7 @@ quota_pd["status"] = (
 
 display(quota_pd)
 
- COMMAND ----------
+# COMMAND ----------
 
 fig = px.bar(
     quota_pd,
@@ -3780,7 +3781,7 @@ fig = format_chart(
 
 fig.show()
 
- COMMAND ----------
+# COMMAND ----------
 
 if len(quota_pd) > 0:
 
@@ -3811,16 +3812,16 @@ else:
 
 
 if status == "CRITICAL":
-    status_color = "dc2626"
+    status_color = "#dc2626"
 
 elif status == "WARNING":
-    status_color = "d97706"
+    status_color = "#d97706"
 
 elif status == "NORMAL":
-    status_color = "059669"
+    status_color = "#059669"
 
 else:
-    status_color = "6b7280"
+    status_color = "#6b7280"
 
 
 displayHTML(f"""
@@ -3828,13 +3829,13 @@ displayHTML(f"""
     margin-top:15px;
     padding:27px;
     border-radius:16px;
-    border:1px solid e5e7eb;
+    border:1px solid #e5e7eb;
     background:white;
 ">
 
     <div style="
         font-size:13px;
-        color:6b7280;
+        color:#6b7280;
         font-weight:600;
     ">
         PEAK OBSERVED CAPACITY
@@ -3859,7 +3860,7 @@ displayHTML(f"""
             </div>
 
             <div style="
-                color:6b7280;
+                color:#6b7280;
                 margin-top:4px;
             ">
                 Workspace: {peak_workspace}
@@ -3886,7 +3887,7 @@ displayHTML(f"""
     <div style="
         width:100%;
         height:15px;
-        background:e5e7eb;
+        background:#e5e7eb;
         border-radius:20px;
         overflow:hidden;
         margin-top:22px;
@@ -3904,7 +3905,7 @@ displayHTML(f"""
     <div style="
         margin-top:10px;
         font-size:12px;
-        color:6b7280;
+        color:#6b7280;
     ">
         NORMAL &lt; 75%
         &nbsp;&nbsp;|&nbsp;&nbsp;
@@ -3916,7 +3917,7 @@ displayHTML(f"""
 </div>
 """)
 
- COMMAND ----------
+# COMMAND ----------
 
 displayHTML("""
 <div style="
@@ -3932,7 +3933,7 @@ displayHTML("""
     </div>
 
     <div style="
-        color:6b7280;
+        color:#6b7280;
         margin-top:5px;
     ">
         High-level compute indicators from the reporting period.
@@ -3941,7 +3942,7 @@ displayHTML("""
 </div>
 """)
 
- COMMAND ----------
+# COMMAND ----------
 
 avg_job_runtime = spark.sql(f"""
 SELECT
@@ -3998,13 +3999,13 @@ avg_daily_text = (
     else "N/A"
 )
 
- COMMAND ----------
+# COMMAND ----------
 
 displayHTML(f"""
 <div style="
     padding:30px;
     border-radius:18px;
-    background:111827;
+    background:#111827;
     color:white;
     margin-bottom:30px;
 ">
@@ -4025,7 +4026,7 @@ displayHTML(f"""
 
         <div>
             <div style="
-                color:9ca3af;
+                color:#9ca3af;
                 font-size:11px;
                 font-weight:600;
             ">
@@ -4043,7 +4044,7 @@ displayHTML(f"""
 
         <div>
             <div style="
-                color:9ca3af;
+                color:#9ca3af;
                 font-size:11px;
                 font-weight:600;
             ">
@@ -4061,7 +4062,7 @@ displayHTML(f"""
 
         <div>
             <div style="
-                color:9ca3af;
+                color:#9ca3af;
                 font-size:11px;
                 font-weight:600;
             ">
@@ -4079,7 +4080,7 @@ displayHTML(f"""
 
         <div>
             <div style="
-                color:9ca3af;
+                color:#9ca3af;
                 font-size:11px;
                 font-weight:600;
             ">
@@ -4097,7 +4098,7 @@ displayHTML(f"""
 
         <div>
             <div style="
-                color:9ca3af;
+                color:#9ca3af;
                 font-size:11px;
                 font-weight:600;
             ">
@@ -4127,41 +4128,43 @@ displayHTML(f"""
 </div>
 """)
 
- COMMAND ----------
+# COMMAND ----------
 
-  %md
-  ---
- 
-   KPI Interpretation Notes
- 
-   Configured workers
-  Represents fixed worker count or configured autoscaling maximum.
- 
-   Actual workers
-  Derived from `system.compute.node_timeline` and excludes driver nodes.
- 
-   Job runtime
-  Derived from Databricks job-run timeline data.
- 
-   Dedicated / reusable uptime
-  Derived from cluster lifecycle events in Databricks audit logs.
- 
-   Biggest cluster
-  Defined for this PoC as the highest observed concurrent worker count for a cluster.
- 
-   Quota proximity
-  This is an **approximation against a configured PoC threshold**.
- 
-  It should not yet be interpreted as authoritative Azure/AWS cloud quota utilization, because real cloud quotas may depend on:
-  - Region
-  - VM family
-  - vCPU family
-  - Subscription/account
-  - Other cloud-specific limits
- 
-  The PoC threshold can later be replaced by the appropriate authoritative quota source.
+#  %md
+#  ---
+# 
+#  ## KPI Interpretation Notes
+# 
+#  ### Configured workers
+#  Represents fixed worker count or configured autoscaling maximum.
+# 
+#  ### Actual workers
+#  Derived from `system.compute.node_timeline` and excludes driver nodes.
+# 
+#  ### Job runtime
+#  Derived from Databricks job-run timeline data.
+# 
+#  ### Dedicated / reusable uptime
+#  Derived from cluster lifecycle events in Databricks audit logs.
+# 
+#  ### Biggest cluster
+#  Defined for this PoC as the highest observed concurrent worker count for a cluster.
+# 
+#  ### Quota proximity
+#  This is an **approximation against a configured PoC threshold**.
+# 
+#  It should not yet be interpreted as authoritative Azure/AWS cloud quota utilization, because real cloud quotas may depend on:
+#  - Region
+#  - VM family
+#  - vCPU family
+#  - Subscription/account
+#  - Other cloud-specific limits
+# 
+#  The PoC threshold can later be replaced by the appropriate authoritative quota source.
 
-       `
+          &gt;
+</code></pre>
+        
       </h3>
 
     </div>
