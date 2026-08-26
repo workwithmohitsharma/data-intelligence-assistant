@@ -2704,6 +2704,7 @@
         Approve a focused PoC: one domain, one Tableau dashboard,
         selected Databricks views and 10–20 real stakeholder questions.
         Databricks notebook source
+        Databricks notebook source
  %md
  # Compute Monitoring — Data Preparation
 
@@ -3040,6 +3041,1463 @@ COMMAND ----------
      'v_cluster_sessions',
      COUNT(*)
  FROM v_cluster_sessions;
+*****************
+         Databricks notebook source
+  %md
+   📊 Compute Capacity & Cluster Monitoring
+ 
+   Databricks Classic Compute Monitoring PoC
+ 
+  This dashboard tells the compute story in sequence:
+ 
+  1. What compute do we have?
+  2. How is compute distributed?
+  3. Which worker families are being used?
+  4. How many workers are actually running?
+  5. How long does compute run?
+  6. Which clusters are the biggest?
+  7. Which runs are the longest?
+  8. Are we approaching our capacity threshold?
+
+ COMMAND ----------
+
+ ============================================================
+ COMPUTE MONITORING DASHBOARD - CONFIGURATION
+ ============================================================
+
+CATALOG = "your_catalog"
+SCHEMA = "your_schema"
+
+LOOKBACK_DAYS = 30
+
+ Temporary capacity threshold for the PoC.
+ Replace this with the agreed real threshold/quota later.
+QUOTA_LIMIT = 500
+
+INVENTORY_VIEW = f"{CATALOG}.{SCHEMA}.v_cluster_inventory"
+NODE_USAGE_VIEW = f"{CATALOG}.{SCHEMA}.v_cluster_node_usage"
+JOB_RUN_VIEW = f"{CATALOG}.{SCHEMA}.v_job_run_duration"
+SESSION_VIEW = f"{CATALOG}.{SCHEMA}.v_cluster_sessions"
+
+print("Dashboard configuration")
+print("-----------------------")
+print("Catalog       :", CATALOG)
+print("Schema        :", SCHEMA)
+print("Lookback Days :", LOOKBACK_DAYS)
+print("Quota Limit   :", QUOTA_LIMIT)
+
+ COMMAND ----------
+
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+
+ COMMAND ----------
+
+ ============================================================
+ COMMON PLOTLY FORMATTING
+ ============================================================
+
+def format_chart(
+    fig,
+    height=480,
+    x_title=None,
+    y_title=None
+):
+    """
+    Applies common dashboard formatting to Plotly charts.
+    """
+
+    fig.update_layout(
+        height=height,
+        margin=dict(
+            l=40,
+            r=30,
+            t=80,
+            b=50
+        ),
+        title=dict(
+            font=dict(size=21)
+        ),
+        legend_title_text="",
+        hoverlabel=dict(
+            font_size=13
+        )
+    )
+
+    if x_title is not None:
+        fig.update_xaxes(
+            title_text=x_title
+        )
+
+    if y_title is not None:
+        fig.update_yaxes(
+            title_text=y_title
+        )
+
+    return fig
+
+ COMMAND ----------
+
+displayHTML(f"""
+<div style="
+    padding:30px;
+    border-radius:18px;
+    background:linear-gradient(135deg,111827,1f2937);
+    color:white;
+    margin-bottom:25px;
+">
+
+    <div style="
+        font-size:32px;
+        font-weight:700;
+        letter-spacing:-0.5px;
+    ">
+        Compute Capacity & Cluster Monitoring
+    </div>
+
+    <div style="
+        margin-top:8px;
+        font-size:16px;
+        color:d1d5db;
+    ">
+        Databricks Classic Compute Monitoring PoC
+    </div>
+
+    <div style="
+        margin-top:18px;
+        display:flex;
+        gap:10px;
+        flex-wrap:wrap;
+    ">
+
+        <span style="
+            padding:7px 13px;
+            border-radius:20px;
+            background:374151;
+            font-size:13px;
+        ">
+            Reporting Window: Last {LOOKBACK_DAYS} Days
+        </span>
+
+        <span style="
+            padding:7px 13px;
+            border-radius:20px;
+            background:374151;
+            font-size:13px;
+        ">
+            Classic Job + Reusable Compute
+        </span>
+
+        <span style="
+            padding:7px 13px;
+            border-radius:20px;
+            background:374151;
+            font-size:13px;
+        ">
+            Worker-Level Capacity Monitoring
+        </span>
+
+    </div>
+
+</div>
+""")
+
+ COMMAND ----------
+
+displayHTML("""
+<div style="
+    margin-top:25px;
+    margin-bottom:15px;
+">
+
+    <div style="
+        font-size:25px;
+        font-weight:700;
+    ">
+        1. Compute Estate Overview
+    </div>
+
+    <div style="
+        margin-top:5px;
+        color:6b7280;
+        font-size:15px;
+    ">
+        What clusters do we have, where are they,
+        and how are they configured?
+    </div>
+
+</div>
+""")
+
+ COMMAND ----------
+
+cluster_summary = spark.sql(f"""
+SELECT
+    COUNT(DISTINCT cluster_id)
+        AS total_clusters,
+
+    COUNT(
+        DISTINCT CASE
+            WHEN cluster_type = 'JOB'
+            THEN cluster_id
+        END
+    ) AS job_clusters,
+
+    COUNT(
+        DISTINCT CASE
+            WHEN cluster_type = 'DEDICATED'
+            THEN cluster_id
+        END
+    ) AS dedicated_clusters,
+
+    COUNT(DISTINCT workspace_id)
+        AS workspace_count
+
+FROM {INVENTORY_VIEW}
+""").first()
+
+total_clusters = cluster_summary["total_clusters"] or 0
+job_clusters = cluster_summary["job_clusters"] or 0
+dedicated_clusters = cluster_summary["dedicated_clusters"] or 0
+workspace_count = cluster_summary["workspace_count"] or 0
+
+ COMMAND ----------
+
+displayHTML(f"""
+<div style="
+    display:grid;
+    grid-template-columns:repeat(4,minmax(180px,1fr));
+    gap:15px;
+    margin-bottom:25px;
+">
+
+    <div style="
+        padding:22px;
+        border-radius:15px;
+        border:1px solid e5e7eb;
+        background:white;
+    ">
+        <div style="
+            color:6b7280;
+            font-size:12px;
+            font-weight:600;
+        ">
+            TOTAL CLUSTERS
+        </div>
+
+        <div style="
+            font-size:34px;
+            margin-top:5px;
+            font-weight:700;
+        ">
+            {total_clusters:,}
+        </div>
+    </div>
+
+    <div style="
+        padding:22px;
+        border-radius:15px;
+        border:1px solid e5e7eb;
+        background:white;
+    ">
+        <div style="
+            color:6b7280;
+            font-size:12px;
+            font-weight:600;
+        ">
+            JOB CLUSTERS
+        </div>
+
+        <div style="
+            font-size:34px;
+            margin-top:5px;
+            font-weight:700;
+        ">
+            {job_clusters:,}
+        </div>
+    </div>
+
+    <div style="
+        padding:22px;
+        border-radius:15px;
+        border:1px solid e5e7eb;
+        background:white;
+    ">
+        <div style="
+            color:6b7280;
+            font-size:12px;
+            font-weight:600;
+        ">
+            DEDICATED / REUSABLE
+        </div>
+
+        <div style="
+            font-size:34px;
+            margin-top:5px;
+            font-weight:700;
+        ">
+            {dedicated_clusters:,}
+        </div>
+    </div>
+
+    <div style="
+        padding:22px;
+        border-radius:15px;
+        border:1px solid e5e7eb;
+        background:white;
+    ">
+        <div style="
+            color:6b7280;
+            font-size:12px;
+            font-weight:600;
+        ">
+            WORKSPACES
+        </div>
+
+        <div style="
+            font-size:34px;
+            margin-top:5px;
+            font-weight:700;
+        ">
+            {workspace_count:,}
+        </div>
+    </div>
+
+</div>
+""")
+
+ COMMAND ----------
+
+inventory_df = spark.sql(f"""
+SELECT
+    workspace_id,
+    cluster_id,
+    cluster_name,
+    owner,
+    cluster_type,
+    cluster_family,
+    configured_workers,
+    min_autoscale_workers,
+    max_autoscale_workers,
+    create_time,
+    delete_time
+
+FROM {INVENTORY_VIEW}
+
+ORDER BY
+    workspace_id,
+    cluster_name
+""")
+
+display(inventory_df)
+
+ COMMAND ----------
+
+cluster_type_pd = spark.sql(f"""
+SELECT
+    cluster_type,
+    COUNT(DISTINCT cluster_id)
+        AS cluster_count
+
+FROM {INVENTORY_VIEW}
+
+GROUP BY cluster_type
+
+ORDER BY cluster_count DESC
+""").toPandas()
+
+fig = px.pie(
+    cluster_type_pd,
+    names="cluster_type",
+    values="cluster_count",
+    hole=0.55,
+    title="Job vs Dedicated / Reusable Compute"
+)
+
+fig = format_chart(
+    fig,
+    height=430
+)
+
+fig.show()
+
+ COMMAND ----------
+
+workspace_pd = spark.sql(f"""
+SELECT
+    CAST(workspace_id AS STRING)
+        AS workspace_id,
+
+    cluster_type,
+
+    COUNT(DISTINCT cluster_id)
+        AS cluster_count
+
+FROM {INVENTORY_VIEW}
+
+GROUP BY
+    workspace_id,
+    cluster_type
+
+ORDER BY workspace_id
+""").toPandas()
+
+fig = px.bar(
+    workspace_pd,
+    x="workspace_id",
+    y="cluster_count",
+    color="cluster_type",
+    barmode="stack",
+    title="Cluster Distribution by Workspace"
+)
+
+fig = format_chart(
+    fig,
+    height=500,
+    x_title="Workspace",
+    y_title="Number of Clusters"
+)
+
+fig.show()
+
+ COMMAND ----------
+
+displayHTML("""
+<div style="
+    margin-top:35px;
+    margin-bottom:15px;
+">
+
+    <div style="
+        font-size:25px;
+        font-weight:700;
+    ">
+        2. Compute Family & Capacity Trends
+    </div>
+
+    <div style="
+        margin-top:5px;
+        color:6b7280;
+        font-size:15px;
+    ">
+        Which worker families are being consumed,
+        and how does actual worker usage change over time?
+    </div>
+
+</div>
+""")
+
+ COMMAND ----------
+
+family_pd = spark.sql(f"""
+SELECT
+    usage_date,
+    node_type AS cluster_family,
+    COUNT(DISTINCT instance_id)
+        AS worker_instances
+
+FROM {NODE_USAGE_VIEW}
+
+WHERE driver = FALSE
+
+  AND start_time >=
+      CURRENT_TIMESTAMP() - INTERVAL {LOOKBACK_DAYS} DAYS
+
+GROUP BY
+    usage_date,
+    node_type
+
+ORDER BY usage_date
+""").toPandas()
+
+fig = px.area(
+    family_pd,
+    x="usage_date",
+    y="worker_instances",
+    color="cluster_family",
+    title="Worker Instance Families Over Time"
+)
+
+fig = format_chart(
+    fig,
+    height=530,
+    x_title="Date",
+    y_title="Distinct Worker Instances"
+)
+
+fig.show()
+
+ COMMAND ----------
+
+worker_usage_pd = spark.sql(f"""
+SELECT
+    usage_hour,
+
+    CAST(workspace_id AS STRING)
+        AS workspace_id,
+
+    COUNT(DISTINCT instance_id)
+        AS worker_instances
+
+FROM {NODE_USAGE_VIEW}
+
+WHERE driver = FALSE
+
+  AND start_time >=
+      CURRENT_TIMESTAMP() - INTERVAL {LOOKBACK_DAYS} DAYS
+
+GROUP BY
+    usage_hour,
+    workspace_id
+
+ORDER BY usage_hour
+""").toPandas()
+
+fig = px.line(
+    worker_usage_pd,
+    x="usage_hour",
+    y="worker_instances",
+    color="workspace_id",
+    title="Worker Instances Used Over Time"
+)
+
+fig = format_chart(
+    fig,
+    height=530,
+    x_title="Time",
+    y_title="Worker Instances"
+)
+
+fig.show()
+
+ COMMAND ----------
+
+daily_instances_pd = spark.sql(f"""
+WITH daily_usage AS (
+
+    SELECT
+        usage_date,
+        workspace_id,
+
+        COUNT(DISTINCT instance_id)
+            AS worker_instances
+
+    FROM {NODE_USAGE_VIEW}
+
+    WHERE driver = FALSE
+
+      AND start_time >=
+          CURRENT_TIMESTAMP() - INTERVAL {LOOKBACK_DAYS} DAYS
+
+    GROUP BY
+        usage_date,
+        workspace_id
+)
+
+SELECT
+    CAST(workspace_id AS STRING)
+        AS workspace_id,
+
+    ROUND(
+        AVG(worker_instances),
+        2
+    ) AS avg_instances_per_day
+
+FROM daily_usage
+
+GROUP BY workspace_id
+
+ORDER BY avg_instances_per_day DESC
+""").toPandas()
+
+fig = px.bar(
+    daily_instances_pd,
+    x="workspace_id",
+    y="avg_instances_per_day",
+    title="Average Worker Instances per Day"
+)
+
+fig = format_chart(
+    fig,
+    height=450,
+    x_title="Workspace",
+    y_title="Average Worker Instances / Day"
+)
+
+fig.show()
+
+ COMMAND ----------
+
+displayHTML("""
+<div style="
+    margin-top:35px;
+    margin-bottom:15px;
+">
+
+    <div style="
+        font-size:25px;
+        font-weight:700;
+    ">
+        3. Runtime Behaviour
+    </div>
+
+    <div style="
+        margin-top:5px;
+        color:6b7280;
+        font-size:15px;
+    ">
+        How long do jobs run, and how long do reusable
+        clusters remain active?
+    </div>
+
+</div>
+""")
+
+ COMMAND ----------
+
+job_average_pd = spark.sql(f"""
+SELECT
+    CAST(workspace_id AS STRING)
+        AS workspace_id,
+
+    ROUND(
+        AVG(run_duration_minutes),
+        2
+    ) AS avg_job_run_minutes
+
+FROM {JOB_RUN_VIEW}
+
+WHERE run_start >=
+      CURRENT_TIMESTAMP() - INTERVAL {LOOKBACK_DAYS} DAYS
+
+GROUP BY workspace_id
+
+ORDER BY avg_job_run_minutes DESC
+""").toPandas()
+
+fig = px.bar(
+    job_average_pd,
+    x="workspace_id",
+    y="avg_job_run_minutes",
+    title="Average Job Run Duration by Workspace"
+)
+
+fig = format_chart(
+    fig,
+    height=450,
+    x_title="Workspace",
+    y_title="Average Runtime (Minutes)"
+)
+
+fig.show()
+
+ COMMAND ----------
+
+dedicated_average_pd = spark.sql(f"""
+SELECT
+    CAST(s.workspace_id AS STRING)
+        AS workspace_id,
+
+    ROUND(
+        AVG(s.run_duration_minutes),
+        2
+    ) AS avg_uptime_minutes
+
+FROM {SESSION_VIEW} s
+
+INNER JOIN {INVENTORY_VIEW} i
+
+    ON s.workspace_id = i.workspace_id
+    AND s.cluster_id = i.cluster_id
+
+WHERE i.cluster_type = 'DEDICATED'
+
+  AND s.run_start >=
+      CURRENT_TIMESTAMP() - INTERVAL {LOOKBACK_DAYS} DAYS
+
+GROUP BY s.workspace_id
+
+ORDER BY avg_uptime_minutes DESC
+""").toPandas()
+
+fig = px.bar(
+    dedicated_average_pd,
+    x="workspace_id",
+    y="avg_uptime_minutes",
+    title="Average Dedicated / Reusable Cluster Uptime"
+)
+
+fig = format_chart(
+    fig,
+    height=450,
+    x_title="Workspace",
+    y_title="Average Uptime (Minutes)"
+)
+
+fig.show()
+
+ COMMAND ----------
+
+displayHTML("""
+<div style="
+    margin-top:35px;
+    margin-bottom:15px;
+">
+
+    <div style="
+        font-size:25px;
+        font-weight:700;
+    ">
+        4. Largest & Longest Compute Consumers
+    </div>
+
+    <div style="
+        margin-top:5px;
+        color:6b7280;
+        font-size:15px;
+    ">
+        Which clusters reach the largest worker footprint,
+        and which workloads remain active the longest?
+    </div>
+
+</div>
+""")
+
+ COMMAND ----------
+
+biggest_clusters_pd = spark.sql(f"""
+WITH minute_usage AS (
+
+    SELECT
+        workspace_id,
+        cluster_id,
+        usage_minute,
+
+        COUNT(DISTINCT instance_id)
+            AS running_workers
+
+    FROM {NODE_USAGE_VIEW}
+
+    WHERE driver = FALSE
+
+      AND start_time >=
+          CURRENT_TIMESTAMP() - INTERVAL {LOOKBACK_DAYS} DAYS
+
+    GROUP BY
+        workspace_id,
+        cluster_id,
+        usage_minute
+),
+
+cluster_peaks AS (
+
+    SELECT
+        workspace_id,
+        cluster_id,
+
+        MAX(running_workers)
+            AS peak_workers
+
+    FROM minute_usage
+
+    GROUP BY
+        workspace_id,
+        cluster_id
+)
+
+SELECT
+    CAST(p.workspace_id AS STRING)
+        AS workspace_id,
+
+    p.cluster_id,
+
+    COALESCE(
+        i.cluster_name,
+        p.cluster_id
+    ) AS cluster_name,
+
+    i.cluster_family,
+
+    p.peak_workers
+
+FROM cluster_peaks p
+
+LEFT JOIN {INVENTORY_VIEW} i
+
+    ON p.workspace_id = i.workspace_id
+    AND p.cluster_id = i.cluster_id
+
+ORDER BY peak_workers DESC
+
+LIMIT 5
+""").toPandas()
+
+fig = px.bar(
+    biggest_clusters_pd.sort_values(
+        "peak_workers"
+    ),
+    x="peak_workers",
+    y="cluster_name",
+    orientation="h",
+
+    hover_data=[
+        "workspace_id",
+        "cluster_family",
+        "cluster_id"
+    ],
+
+    title="Top 5 Biggest Clusters — Peak Observed Workers"
+)
+
+fig = format_chart(
+    fig,
+    height=460,
+    x_title="Peak Worker Instances",
+    y_title="Cluster"
+)
+
+fig.show()
+
+ COMMAND ----------
+
+longest_jobs_pd = spark.sql(f"""
+SELECT
+    CAST(workspace_id AS STRING)
+        AS workspace_id,
+
+    job_id,
+    run_id,
+    run_start,
+    run_end,
+    run_duration_minutes
+
+FROM {JOB_RUN_VIEW}
+
+WHERE run_start >=
+      CURRENT_TIMESTAMP() - INTERVAL {LOOKBACK_DAYS} DAYS
+
+ORDER BY run_duration_minutes DESC
+
+LIMIT 5
+""").toPandas()
+
+longest_jobs_pd["run_label"] = (
+    "Job "
+    + longest_jobs_pd["job_id"].astype(str)
+    + " / Run "
+    + longest_jobs_pd["run_id"].astype(str)
+)
+
+fig = px.bar(
+    longest_jobs_pd.sort_values(
+        "run_duration_minutes"
+    ),
+    x="run_duration_minutes",
+    y="run_label",
+    orientation="h",
+
+    hover_data=[
+        "workspace_id",
+        "run_start",
+        "run_end"
+    ],
+
+    title="Top 5 Longest Job Runs"
+)
+
+fig = format_chart(
+    fig,
+    height=460,
+    x_title="Run Duration (Minutes)",
+    y_title=""
+)
+
+fig.show()
+
+ COMMAND ----------
+
+longest_dedicated_pd = spark.sql(f"""
+SELECT
+    CAST(s.workspace_id AS STRING)
+        AS workspace_id,
+
+    s.cluster_id,
+
+    COALESCE(
+        i.cluster_name,
+        s.cluster_id
+    ) AS cluster_name,
+
+    s.run_start,
+    s.run_end,
+    s.run_duration_minutes,
+    s.end_event,
+    s.termination_reason
+
+FROM {SESSION_VIEW} s
+
+INNER JOIN {INVENTORY_VIEW} i
+
+    ON s.workspace_id = i.workspace_id
+    AND s.cluster_id = i.cluster_id
+
+WHERE i.cluster_type = 'DEDICATED'
+
+  AND s.run_start >=
+      CURRENT_TIMESTAMP() - INTERVAL {LOOKBACK_DAYS} DAYS
+
+ORDER BY s.run_duration_minutes DESC
+
+LIMIT 5
+""").toPandas()
+
+fig = px.bar(
+    longest_dedicated_pd.sort_values(
+        "run_duration_minutes"
+    ),
+    x="run_duration_minutes",
+    y="cluster_name",
+    orientation="h",
+
+    hover_data=[
+        "workspace_id",
+        "cluster_id",
+        "run_start",
+        "run_end",
+        "end_event",
+        "termination_reason"
+    ],
+
+    title="Top 5 Longest Dedicated Cluster Sessions"
+)
+
+fig = format_chart(
+    fig,
+    height=460,
+    x_title="Session Duration (Minutes)",
+    y_title="Cluster"
+)
+
+fig.show()
+
+ COMMAND ----------
+
+displayHTML("""
+<div style="
+    margin-top:35px;
+    margin-bottom:15px;
+">
+
+    <div style="
+        font-size:25px;
+        font-weight:700;
+    ">
+        5. Capacity & Quota Proximity
+    </div>
+
+    <div style="
+        margin-top:5px;
+        color:6b7280;
+        font-size:15px;
+    ">
+        Are observed worker levels approaching the
+        capacity threshold defined for this PoC?
+    </div>
+
+</div>
+""")
+
+ COMMAND ----------
+
+quota_pd = spark.sql(f"""
+WITH observed_usage AS (
+
+    SELECT
+        usage_minute,
+        workspace_id,
+
+        COUNT(DISTINCT instance_id)
+            AS concurrent_workers
+
+    FROM {NODE_USAGE_VIEW}
+
+    WHERE driver = FALSE
+
+      AND start_time >=
+          CURRENT_TIMESTAMP() - INTERVAL {LOOKBACK_DAYS} DAYS
+
+    GROUP BY
+        usage_minute,
+        workspace_id
+),
+
+peak_usage AS (
+
+    SELECT
+        workspace_id,
+
+        MAX(concurrent_workers)
+            AS peak_workers
+
+    FROM observed_usage
+
+    GROUP BY workspace_id
+)
+
+SELECT
+    CAST(workspace_id AS STRING)
+        AS workspace_id,
+
+    peak_workers,
+
+    {QUOTA_LIMIT}
+        AS quota_limit,
+
+    ROUND(
+        peak_workers / {float(QUOTA_LIMIT)} * 100,
+        2
+    ) AS quota_usage_pct
+
+FROM peak_usage
+
+ORDER BY quota_usage_pct DESC
+""").toPandas()
+
+def get_capacity_status(value):
+
+    if value >= 90:
+        return "CRITICAL"
+
+    if value >= 75:
+        return "WARNING"
+
+    return "NORMAL"
+
+quota_pd["status"] = (
+    quota_pd["quota_usage_pct"]
+    .apply(get_capacity_status)
+)
+
+display(quota_pd)
+
+ COMMAND ----------
+
+fig = px.bar(
+    quota_pd,
+    x="workspace_id",
+    y="quota_usage_pct",
+
+    hover_data=[
+        "peak_workers",
+        "quota_limit",
+        "status"
+    ],
+
+    title="Peak Observed Capacity / Quota Proximity"
+)
+
+fig.add_hline(
+    y=75,
+    line_dash="dash",
+    annotation_text="Warning — 75%"
+)
+
+fig.add_hline(
+    y=90,
+    line_dash="dash",
+    annotation_text="Critical — 90%"
+)
+
+fig = format_chart(
+    fig,
+    height=500,
+    x_title="Workspace",
+    y_title="Observed Capacity (%)"
+)
+
+fig.show()
+
+ COMMAND ----------
+
+if len(quota_pd) > 0:
+
+    peak_row = quota_pd.loc[
+        quota_pd["quota_usage_pct"].idxmax()
+    ]
+
+    peak_pct = float(
+        peak_row["quota_usage_pct"]
+    )
+
+    peak_workspace = str(
+        peak_row["workspace_id"]
+    )
+
+    peak_workers = int(
+        peak_row["peak_workers"]
+    )
+
+    status = peak_row["status"]
+
+else:
+
+    peak_pct = 0.0
+    peak_workspace = "N/A"
+    peak_workers = 0
+    status = "NO DATA"
+
+
+if status == "CRITICAL":
+    status_color = "dc2626"
+
+elif status == "WARNING":
+    status_color = "d97706"
+
+elif status == "NORMAL":
+    status_color = "059669"
+
+else:
+    status_color = "6b7280"
+
+
+displayHTML(f"""
+<div style="
+    margin-top:15px;
+    padding:27px;
+    border-radius:16px;
+    border:1px solid e5e7eb;
+    background:white;
+">
+
+    <div style="
+        font-size:13px;
+        color:6b7280;
+        font-weight:600;
+    ">
+        PEAK OBSERVED CAPACITY
+    </div>
+
+    <div style="
+        display:flex;
+        justify-content:space-between;
+        align-items:center;
+        margin-top:8px;
+        flex-wrap:wrap;
+        gap:15px;
+    ">
+
+        <div>
+
+            <div style="
+                font-size:40px;
+                font-weight:700;
+            ">
+                {peak_pct:.2f}%
+            </div>
+
+            <div style="
+                color:6b7280;
+                margin-top:4px;
+            ">
+                Workspace: {peak_workspace}
+                <br>
+                Peak workers: {peak_workers:,}
+                / {QUOTA_LIMIT:,}
+            </div>
+
+        </div>
+
+        <div style="
+            padding:11px 20px;
+            border-radius:30px;
+            background:{status_color};
+            color:white;
+            font-weight:700;
+            font-size:14px;
+        ">
+            {status}
+        </div>
+
+    </div>
+
+    <div style="
+        width:100%;
+        height:15px;
+        background:e5e7eb;
+        border-radius:20px;
+        overflow:hidden;
+        margin-top:22px;
+    ">
+
+        <div style="
+            height:100%;
+            width:{min(peak_pct,100)}%;
+            background:{status_color};
+        ">
+        </div>
+
+    </div>
+
+    <div style="
+        margin-top:10px;
+        font-size:12px;
+        color:6b7280;
+    ">
+        NORMAL &lt; 75%
+        &nbsp;&nbsp;|&nbsp;&nbsp;
+        WARNING ≥ 75%
+        &nbsp;&nbsp;|&nbsp;&nbsp;
+        CRITICAL ≥ 90%
+    </div>
+
+</div>
+""")
+
+ COMMAND ----------
+
+displayHTML("""
+<div style="
+    margin-top:40px;
+    margin-bottom:15px;
+">
+
+    <div style="
+        font-size:25px;
+        font-weight:700;
+    ">
+        6. Executive Summary
+    </div>
+
+    <div style="
+        color:6b7280;
+        margin-top:5px;
+    ">
+        High-level compute indicators from the reporting period.
+    </div>
+
+</div>
+""")
+
+ COMMAND ----------
+
+avg_job_runtime = spark.sql(f"""
+SELECT
+    ROUND(
+        AVG(run_duration_minutes),
+        2
+    ) AS value
+
+FROM {JOB_RUN_VIEW}
+
+WHERE run_start >=
+      CURRENT_TIMESTAMP() - INTERVAL {LOOKBACK_DAYS} DAYS
+""").first()["value"]
+
+
+avg_daily_workers = spark.sql(f"""
+WITH daily AS (
+
+    SELECT
+        usage_date,
+
+        COUNT(DISTINCT instance_id)
+            AS workers
+
+    FROM {NODE_USAGE_VIEW}
+
+    WHERE driver = FALSE
+
+      AND start_time >=
+          CURRENT_TIMESTAMP() - INTERVAL {LOOKBACK_DAYS} DAYS
+
+    GROUP BY usage_date
+)
+
+SELECT
+    ROUND(
+        AVG(workers),
+        2
+    ) AS value
+
+FROM daily
+""").first()["value"]
+
+
+avg_job_text = (
+    f"{float(avg_job_runtime):,.2f} min"
+    if avg_job_runtime is not None
+    else "N/A"
+)
+
+avg_daily_text = (
+    f"{float(avg_daily_workers):,.2f}"
+    if avg_daily_workers is not None
+    else "N/A"
+)
+
+ COMMAND ----------
+
+displayHTML(f"""
+<div style="
+    padding:30px;
+    border-radius:18px;
+    background:111827;
+    color:white;
+    margin-bottom:30px;
+">
+
+    <div style="
+        font-size:24px;
+        font-weight:700;
+        margin-bottom:22px;
+    ">
+        Compute Monitoring Summary
+    </div>
+
+    <div style="
+        display:grid;
+        grid-template-columns:repeat(5,minmax(150px,1fr));
+        gap:20px;
+    ">
+
+        <div>
+            <div style="
+                color:9ca3af;
+                font-size:11px;
+                font-weight:600;
+            ">
+                TOTAL CLUSTERS
+            </div>
+
+            <div style="
+                margin-top:5px;
+                font-size:28px;
+                font-weight:700;
+            ">
+                {total_clusters:,}
+            </div>
+        </div>
+
+        <div>
+            <div style="
+                color:9ca3af;
+                font-size:11px;
+                font-weight:600;
+            ">
+                WORKSPACES
+            </div>
+
+            <div style="
+                margin-top:5px;
+                font-size:28px;
+                font-weight:700;
+            ">
+                {workspace_count:,}
+            </div>
+        </div>
+
+        <div>
+            <div style="
+                color:9ca3af;
+                font-size:11px;
+                font-weight:600;
+            ">
+                AVG JOB RUN
+            </div>
+
+            <div style="
+                margin-top:5px;
+                font-size:28px;
+                font-weight:700;
+            ">
+                {avg_job_text}
+            </div>
+        </div>
+
+        <div>
+            <div style="
+                color:9ca3af;
+                font-size:11px;
+                font-weight:600;
+            ">
+                AVG WORKERS / DAY
+            </div>
+
+            <div style="
+                margin-top:5px;
+                font-size:28px;
+                font-weight:700;
+            ">
+                {avg_daily_text}
+            </div>
+        </div>
+
+        <div>
+            <div style="
+                color:9ca3af;
+                font-size:11px;
+                font-weight:600;
+            ">
+                PEAK CAPACITY
+            </div>
+
+            <div style="
+                margin-top:5px;
+                font-size:28px;
+                font-weight:700;
+            ">
+                {peak_pct:.2f}%
+            </div>
+
+            <div style="
+                margin-top:4px;
+                font-size:12px;
+                color:{status_color};
+                font-weight:700;
+            ">
+                {status}
+            </div>
+        </div>
+
+    </div>
+
+</div>
+""")
+
+ COMMAND ----------
+
+  %md
+  ---
+ 
+   KPI Interpretation Notes
+ 
+   Configured workers
+  Represents fixed worker count or configured autoscaling maximum.
+ 
+   Actual workers
+  Derived from `system.compute.node_timeline` and excludes driver nodes.
+ 
+   Job runtime
+  Derived from Databricks job-run timeline data.
+ 
+   Dedicated / reusable uptime
+  Derived from cluster lifecycle events in Databricks audit logs.
+ 
+   Biggest cluster
+  Defined for this PoC as the highest observed concurrent worker count for a cluster.
+ 
+   Quota proximity
+  This is an **approximation against a configured PoC threshold**.
+ 
+  It should not yet be interpreted as authoritative Azure/AWS cloud quota utilization, because real cloud quotas may depend on:
+  - Region
+  - VM family
+  - vCPU family
+  - Subscription/account
+  - Other cloud-specific limits
+ 
+  The PoC threshold can later be replaced by the appropriate authoritative quota source.
 
 
 
