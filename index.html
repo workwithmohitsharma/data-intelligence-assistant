@@ -2703,6 +2703,344 @@
 
         Approve a focused PoC: one domain, one Tableau dashboard,
         selected Databricks views and 10–20 real stakeholder questions.
+        # Databricks notebook source
+# MAGIC %md
+# MAGIC # Compute Monitoring — Data Preparation
+# MAGIC
+# MAGIC This notebook creates the reusable data views used by the Compute Capacity & Cluster Monitoring Dashboard.
+# MAGIC
+# MAGIC ### Source System Tables
+# MAGIC - `system.compute.clusters`
+# MAGIC - `system.compute.node_timeline`
+# MAGIC - `system.lakeflow.job_run_timeline`
+# MAGIC - `system.access.audit`
+# MAGIC
+# MAGIC ### Output Views
+# MAGIC - `v_cluster_inventory`
+# MAGIC - `v_cluster_node_usage`
+# MAGIC - `v_job_run_duration`
+# MAGIC - `v_cluster_sessions`
+# MAGIC
+# MAGIC > Dashboard terminology: `DEDICATED` below means non-job/classic reusable compute for this PoC. It is not the Databricks `data_security_mode = DEDICATED` setting.
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC USE CATALOG your_catalog;
+# MAGIC USE SCHEMA your_schema;
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 1. Cluster Inventory
+# MAGIC
+# MAGIC Creates one latest configuration record per cluster.
+# MAGIC
+# MAGIC Provides:
+# MAGIC - Workspace
+# MAGIC - Cluster ID
+# MAGIC - Cluster name
+# MAGIC - Owner
+# MAGIC - Job vs Dedicated classification
+# MAGIC - Worker/driver family
+# MAGIC - Fixed/autoscaling worker configuration
+# MAGIC - Cluster create/delete/configuration timestamps
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE VIEW v_cluster_inventory AS
+# MAGIC
+# MAGIC WITH latest_cluster_config AS (
+# MAGIC
+# MAGIC     SELECT
+# MAGIC         workspace_id,
+# MAGIC         cluster_id,
+# MAGIC         cluster_name,
+# MAGIC         owned_by AS owner,
+# MAGIC         cluster_source,
+# MAGIC         driver_node_type,
+# MAGIC         worker_node_type,
+# MAGIC         worker_count,
+# MAGIC         min_autoscale_workers,
+# MAGIC         max_autoscale_workers,
+# MAGIC         create_time,
+# MAGIC         delete_time,
+# MAGIC         change_time,
+# MAGIC
+# MAGIC         ROW_NUMBER() OVER (
+# MAGIC             PARTITION BY workspace_id, cluster_id
+# MAGIC             ORDER BY change_time DESC
+# MAGIC         ) AS rn
+# MAGIC
+# MAGIC     FROM system.compute.clusters
+# MAGIC )
+# MAGIC
+# MAGIC SELECT
+# MAGIC     workspace_id,
+# MAGIC     cluster_id,
+# MAGIC     cluster_name,
+# MAGIC     owner,
+# MAGIC     cluster_source,
+# MAGIC
+# MAGIC     CASE
+# MAGIC         WHEN cluster_source = 'JOB'
+# MAGIC             THEN 'JOB'
+# MAGIC         ELSE 'DEDICATED'
+# MAGIC     END AS cluster_type,
+# MAGIC
+# MAGIC     driver_node_type,
+# MAGIC     worker_node_type AS cluster_family,
+# MAGIC     worker_count,
+# MAGIC     min_autoscale_workers,
+# MAGIC     max_autoscale_workers,
+# MAGIC
+# MAGIC     COALESCE(
+# MAGIC         worker_count,
+# MAGIC         max_autoscale_workers
+# MAGIC     ) AS configured_workers,
+# MAGIC
+# MAGIC     create_time,
+# MAGIC     delete_time,
+# MAGIC     change_time
+# MAGIC
+# MAGIC FROM latest_cluster_config
+# MAGIC WHERE rn = 1;
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 2. Worker / Instance Usage
+# MAGIC
+# MAGIC Provides instance-level compute observations.
+# MAGIC
+# MAGIC Used for:
+# MAGIC - Actual workers over time
+# MAGIC - Cluster families over time
+# MAGIC - Average worker instances/day
+# MAGIC - Biggest clusters
+# MAGIC - Capacity/quota approximation
+# MAGIC
+# MAGIC The `driver` field lets the dashboard exclude driver nodes from worker KPIs.
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE VIEW v_cluster_node_usage AS
+# MAGIC
+# MAGIC SELECT
+# MAGIC     workspace_id,
+# MAGIC     cluster_id,
+# MAGIC     instance_id,
+# MAGIC     node_type,
+# MAGIC     driver,
+# MAGIC     start_time,
+# MAGIC     end_time,
+# MAGIC     DATE(start_time) AS usage_date,
+# MAGIC     DATE_TRUNC('HOUR', start_time) AS usage_hour,
+# MAGIC     DATE_TRUNC('MINUTE', start_time) AS usage_minute
+# MAGIC
+# MAGIC FROM system.compute.node_timeline
+# MAGIC
+# MAGIC WHERE start_time >= CURRENT_TIMESTAMP() - INTERVAL 90 DAYS;
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 3. Job Run Duration
+# MAGIC
+# MAGIC Creates one record per Databricks job run.
+# MAGIC
+# MAGIC Provides:
+# MAGIC - Workspace
+# MAGIC - Job ID
+# MAGIC - Run ID
+# MAGIC - Run start
+# MAGIC - Run end
+# MAGIC - Run duration
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE VIEW v_job_run_duration AS
+# MAGIC
+# MAGIC WITH job_runs AS (
+# MAGIC
+# MAGIC     SELECT
+# MAGIC         workspace_id,
+# MAGIC         job_id,
+# MAGIC         run_id,
+# MAGIC         MIN(period_start_time) AS run_start,
+# MAGIC         MAX(period_end_time) AS run_end
+# MAGIC
+# MAGIC     FROM system.lakeflow.job_run_timeline
+# MAGIC
+# MAGIC     WHERE period_start_time >= CURRENT_TIMESTAMP() - INTERVAL 90 DAYS
+# MAGIC
+# MAGIC     GROUP BY
+# MAGIC         workspace_id,
+# MAGIC         job_id,
+# MAGIC         run_id
+# MAGIC )
+# MAGIC
+# MAGIC SELECT
+# MAGIC     workspace_id,
+# MAGIC     job_id,
+# MAGIC     run_id,
+# MAGIC     run_start,
+# MAGIC     run_end,
+# MAGIC
+# MAGIC     ROUND(
+# MAGIC         TIMESTAMPDIFF(
+# MAGIC             SECOND,
+# MAGIC             run_start,
+# MAGIC             run_end
+# MAGIC         ) / 60.0,
+# MAGIC         2
+# MAGIC     ) AS run_duration_minutes
+# MAGIC
+# MAGIC FROM job_runs
+# MAGIC
+# MAGIC WHERE run_end IS NOT NULL;
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 4. Dedicated / Reusable Cluster Sessions
+# MAGIC
+# MAGIC Uses cluster lifecycle audit events to derive observed cluster sessions.
+# MAGIC
+# MAGIC Session boundaries:
+# MAGIC - Start → Restart
+# MAGIC - Start → Delete
+# MAGIC - Restart → Restart
+# MAGIC - Restart → Delete
+# MAGIC
+# MAGIC Job clusters are removed later in the dashboard by joining to the inventory view.
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE VIEW v_cluster_sessions AS
+# MAGIC
+# MAGIC WITH lifecycle_events AS (
+# MAGIC
+# MAGIC     SELECT
+# MAGIC         workspace_id,
+# MAGIC         request_params['cluster_id'] AS cluster_id,
+# MAGIC         event_time,
+# MAGIC         action_name,
+# MAGIC         request_params['termination_reason'] AS termination_reason
+# MAGIC
+# MAGIC     FROM system.access.audit
+# MAGIC
+# MAGIC     WHERE service_name = 'clusters'
+# MAGIC
+# MAGIC       AND action_name IN (
+# MAGIC           'start',
+# MAGIC           'restart',
+# MAGIC           'delete'
+# MAGIC       )
+# MAGIC
+# MAGIC       AND event_time >= CURRENT_TIMESTAMP() - INTERVAL 90 DAYS
+# MAGIC
+# MAGIC       AND request_params['cluster_id'] IS NOT NULL
+# MAGIC ),
+# MAGIC
+# MAGIC ordered_events AS (
+# MAGIC
+# MAGIC     SELECT
+# MAGIC         workspace_id,
+# MAGIC         cluster_id,
+# MAGIC         event_time,
+# MAGIC         action_name,
+# MAGIC
+# MAGIC         LEAD(event_time) OVER (
+# MAGIC             PARTITION BY workspace_id, cluster_id
+# MAGIC             ORDER BY event_time
+# MAGIC         ) AS next_event_time,
+# MAGIC
+# MAGIC         LEAD(action_name) OVER (
+# MAGIC             PARTITION BY workspace_id, cluster_id
+# MAGIC             ORDER BY event_time
+# MAGIC         ) AS next_action,
+# MAGIC
+# MAGIC         LEAD(termination_reason) OVER (
+# MAGIC             PARTITION BY workspace_id, cluster_id
+# MAGIC             ORDER BY event_time
+# MAGIC         ) AS termination_reason
+# MAGIC
+# MAGIC     FROM lifecycle_events
+# MAGIC )
+# MAGIC
+# MAGIC SELECT
+# MAGIC     workspace_id,
+# MAGIC     cluster_id,
+# MAGIC     event_time AS run_start,
+# MAGIC     next_event_time AS run_end,
+# MAGIC
+# MAGIC     ROUND(
+# MAGIC         TIMESTAMPDIFF(
+# MAGIC             SECOND,
+# MAGIC             event_time,
+# MAGIC             next_event_time
+# MAGIC         ) / 60.0,
+# MAGIC         2
+# MAGIC     ) AS run_duration_minutes,
+# MAGIC
+# MAGIC     next_action AS end_event,
+# MAGIC     termination_reason
+# MAGIC
+# MAGIC FROM ordered_events
+# MAGIC
+# MAGIC WHERE action_name IN (
+# MAGIC     'start',
+# MAGIC     'restart'
+# MAGIC )
+# MAGIC
+# MAGIC AND next_action IN (
+# MAGIC     'restart',
+# MAGIC     'delete'
+# MAGIC )
+# MAGIC
+# MAGIC AND next_event_time IS NOT NULL;
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC # Validation
+# MAGIC
+# MAGIC The following checks confirm all four dashboard views are available and populated.
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC     'v_cluster_inventory' AS view_name,
+# MAGIC     COUNT(*) AS row_count
+# MAGIC FROM v_cluster_inventory
+# MAGIC
+# MAGIC UNION ALL
+# MAGIC
+# MAGIC SELECT
+# MAGIC     'v_cluster_node_usage',
+# MAGIC     COUNT(*)
+# MAGIC FROM v_cluster_node_usage
+# MAGIC
+# MAGIC UNION ALL
+# MAGIC
+# MAGIC SELECT
+# MAGIC     'v_job_run_duration',
+# MAGIC     COUNT(*)
+# MAGIC FROM v_job_run_duration
+# MAGIC
+# MAGIC UNION ALL
+# MAGIC
+# MAGIC SELECT
+# MAGIC     'v_cluster_sessions',
+# MAGIC     COUNT(*)
+# MAGIC FROM v_cluster_sessions;
+
 
       </h3>
 
