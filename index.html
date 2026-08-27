@@ -2702,7 +2702,739 @@
       >
 
         Approve a focused PoC: one domain, one Tableau dashboard,
-        selected Databricks views and 10–20 real stakeholder questions.    
+        selected Databricks views and 10–20 real stakeholder questions.
+        <p>
+          # Databricks notebook source
+# MAGIC %md
+# MAGIC # Compute Monitoring V2 — Backend / Semantic Views
+# MAGIC
+# MAGIC This notebook prepares reusable views for a unified Databricks AI/BI dashboard.
+# MAGIC It intentionally contains **no Plotly dashboard rendering**.
+# MAGIC
+# MAGIC Global dashboard filters should be created in the AI/BI dashboard layer on:
+# MAGIC - `team_scope`
+# MAGIC - `workspace_label` / `workspace_id`
+# MAGIC - `event_date` / `run_start`
+# MAGIC - `workload_type`
+# MAGIC - `cluster_type` where applicable
+# MAGIC
+# MAGIC Main outputs:
+# MAGIC - `v_workspace_dim`
+# MAGIC - `v_cluster_inventory`
+# MAGIC - `v_cluster_node_usage`
+# MAGIC - `v_cluster_sessions`
+# MAGIC - `v_workload_runs`
+# MAGIC - `v_compute_dashboard_overview`
+# MAGIC
+# MAGIC Persistent configuration table:
+# MAGIC - `compute_team_scope_map`
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 0. Environment configuration
+
+# COMMAND ----------
+# Make the notebook portable across environments.
+for _name, _default in [
+    ("catalog", "sandbox_tmp"),
+    ("schema", "msharma"),
+    ("history_days", "365"),
+    ("quota_limit", "500"),
+]:
+    try:
+        dbutils.widgets.text(_name, _default)
+    except Exception:
+        pass
+
+CATALOG = dbutils.widgets.get("catalog").strip()
+SCHEMA = dbutils.widgets.get("schema").strip()
+HISTORY_DAYS = int(dbutils.widgets.get("history_days"))
+QUOTA_LIMIT = int(dbutils.widgets.get("quota_limit"))
+
+TARGET = f"{CATALOG}.{SCHEMA}"
+
+print("Compute Monitoring V2")
+print("---------------------")
+print("Target       :", TARGET)
+print("History days :", HISTORY_DAYS)
+print("Quota limit  :", QUOTA_LIMIT)
+
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {TARGET}")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 1. Team / scope mapping
+# MAGIC
+# MAGIC This is the only organizational mapping that needs to be maintained outside system tables.
+# MAGIC It lets the same dashboard support **Data Science** and **All** without hard-coding one workspace.
+# MAGIC
+# MAGIC Supported `match_type` values:
+# MAGIC - `WORKSPACE` → `match_value = workspace_id`
+# MAGIC - `OWNER` → `match_value = user/service-principal value`
+# MAGIC - `CLUSTER` → `match_value = cluster_id`
+# MAGIC - `JOB` → `match_value = job_id`
+# MAGIC - `PIPELINE` → `match_value = pipeline_id`
+# MAGIC
+# MAGIC Example row:
+# MAGIC `('Data Science', 'WORKSPACE', '1234567890123456', true, 10, 'DS workspace')`
+# MAGIC
+# MAGIC More specific mappings should use a higher priority than broad workspace mappings.
+
+# COMMAND ----------
+spark.sql(f"""
+CREATE TABLE IF NOT EXISTS {TARGET}.compute_team_scope_map (
+    scope_name STRING,
+    match_type STRING,
+    match_value STRING,
+    active BOOLEAN,
+    priority INT,
+    comment STRING
+)
+USING DELTA
+""")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 2. Workspace dimension
+# MAGIC Uses the account-level workspace system table when available. If the Public Preview table is not enabled,
+# MAGIC falls back to workspace IDs observed in compute data.
+
+# COMMAND ----------
+try:
+    spark.sql("SELECT workspace_id, workspace_name FROM system.access.workspaces_latest LIMIT 1").collect()
+    spark.sql(f"""
+    CREATE OR REPLACE VIEW {TARGET}.v_workspace_dim AS
+    SELECT
+        CAST(workspace_id AS STRING) AS workspace_id,
+        workspace_name,
+        CONCAT(CAST(workspace_id AS STRING), ' (', workspace_name, ')') AS workspace_label,
+        workspace_url,
+        status
+    FROM system.access.workspaces_latest
+    """)
+    print("Workspace names: system.access.workspaces_latest")
+except Exception as exc:
+    spark.sql(f"""
+    CREATE OR REPLACE VIEW {TARGET}.v_workspace_dim AS
+    SELECT DISTINCT
+        CAST(workspace_id AS STRING) AS workspace_id,
+        CAST(workspace_id AS STRING) AS workspace_name,
+        CAST(workspace_id AS STRING) AS workspace_label,
+        CAST(NULL AS STRING) AS workspace_url,
+        CAST(NULL AS STRING) AS status
+    FROM system.compute.clusters
+    WHERE workspace_id IS NOT NULL
+    """)
+    print("Workspace names unavailable; using workspace_id fallback.")
+    print(str(exc)[:300])
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 3. Cluster inventory
+
+# COMMAND ----------
+spark.sql(f"""
+CREATE OR REPLACE VIEW {TARGET}.v_cluster_inventory AS
+WITH latest_cluster_config AS (
+    SELECT
+        CAST(c.workspace_id AS STRING) AS workspace_id,
+        c.cluster_id,
+        c.cluster_name,
+        c.owned_by AS owner,
+        c.cluster_source,
+        c.driver_node_type,
+        c.worker_node_type,
+        c.worker_count,
+        c.min_autoscale_workers,
+        c.max_autoscale_workers,
+        c.create_time,
+        c.delete_time,
+        c.change_time,
+        ROW_NUMBER() OVER (
+            PARTITION BY c.workspace_id, c.cluster_id
+            ORDER BY c.change_time DESC
+        ) AS rn
+    FROM system.compute.clusters c
+), base AS (
+    SELECT
+        c.workspace_id,
+        w.workspace_name,
+        w.workspace_label,
+        c.cluster_id,
+        c.cluster_name,
+        c.owner,
+        c.cluster_source,
+        CASE WHEN c.cluster_source = 'JOB' THEN 'JOB' ELSE 'DEDICATED' END AS cluster_type,
+        c.driver_node_type,
+        c.worker_node_type AS cluster_family,
+        c.worker_count,
+        c.min_autoscale_workers,
+        c.max_autoscale_workers,
+        COALESCE(c.worker_count, c.max_autoscale_workers) AS configured_workers,
+        c.create_time,
+        c.delete_time,
+        c.change_time
+    FROM latest_cluster_config c
+    LEFT JOIN {TARGET}.v_workspace_dim w
+      ON c.workspace_id = w.workspace_id
+    WHERE c.rn = 1
+), mapped AS (
+    SELECT
+        b.*,
+        m.scope_name,
+        ROW_NUMBER() OVER (
+            PARTITION BY b.workspace_id, b.cluster_id
+            ORDER BY
+                CASE m.match_type
+                    WHEN 'CLUSTER' THEN 3
+                    WHEN 'OWNER' THEN 2
+                    WHEN 'WORKSPACE' THEN 1
+                    ELSE 0
+                END DESC,
+                COALESCE(m.priority, 0) DESC
+        ) AS map_rn
+    FROM base b
+    LEFT JOIN {TARGET}.compute_team_scope_map m
+      ON m.active = TRUE
+     AND (
+            (UPPER(m.match_type) = 'CLUSTER' AND m.match_value = CAST(b.cluster_id AS STRING))
+         OR (UPPER(m.match_type) = 'OWNER' AND LOWER(m.match_value) = LOWER(COALESCE(b.owner, '')))
+         OR (UPPER(m.match_type) = 'WORKSPACE' AND m.match_value = b.workspace_id)
+     )
+)
+SELECT
+    workspace_id,
+    workspace_name,
+    workspace_label,
+    COALESCE(scope_name, 'Unmapped') AS team_scope,
+    cluster_id,
+    cluster_name,
+    owner,
+    cluster_source,
+    cluster_type,
+    driver_node_type,
+    cluster_family,
+    worker_count,
+    min_autoscale_workers,
+    max_autoscale_workers,
+    configured_workers,
+    create_time,
+    delete_time,
+    change_time
+FROM mapped
+WHERE map_rn = 1
+""")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 4. Node / worker usage history
+# MAGIC Keeps up to 365 days by default so the dashboard can support 7D / 30D / 90D / 6M / 12M trends.
+
+# COMMAND ----------
+spark.sql(f"""
+CREATE OR REPLACE VIEW {TARGET}.v_cluster_node_usage AS
+SELECT
+    CAST(n.workspace_id AS STRING) AS workspace_id,
+    COALESCE(i.workspace_name, w.workspace_name) AS workspace_name,
+    COALESCE(i.workspace_label, w.workspace_label, CAST(n.workspace_id AS STRING)) AS workspace_label,
+    COALESCE(i.team_scope, 'Unmapped') AS team_scope,
+    n.cluster_id,
+    i.cluster_name,
+    i.owner,
+    i.cluster_type,
+    n.instance_id,
+    n.node_type AS cluster_family,
+    n.driver,
+    n.start_time,
+    n.end_time,
+    DATE(n.start_time) AS event_date,
+    DATE_TRUNC('HOUR', n.start_time) AS usage_hour,
+    DATE_TRUNC('MINUTE', n.start_time) AS usage_minute
+FROM system.compute.node_timeline n
+LEFT JOIN {TARGET}.v_cluster_inventory i
+  ON CAST(n.workspace_id AS STRING) = i.workspace_id
+ AND n.cluster_id = i.cluster_id
+LEFT JOIN {TARGET}.v_workspace_dim w
+  ON CAST(n.workspace_id AS STRING) = w.workspace_id
+WHERE n.start_time >= CURRENT_TIMESTAMP() - INTERVAL {HISTORY_DAYS} DAYS
+""")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 5. Dedicated / reusable cluster sessions
+
+# COMMAND ----------
+spark.sql(f"""
+CREATE OR REPLACE VIEW {TARGET}.v_cluster_sessions AS
+WITH lifecycle_events AS (
+    SELECT
+        CAST(workspace_id AS STRING) AS workspace_id,
+        request_params['cluster_id'] AS cluster_id,
+        event_time,
+        action_name,
+        request_params['termination_reason'] AS termination_reason
+    FROM system.access.audit
+    WHERE service_name = 'clusters'
+      AND action_name IN ('start', 'restart', 'delete')
+      AND event_time >= CURRENT_TIMESTAMP() - INTERVAL {HISTORY_DAYS} DAYS
+      AND request_params['cluster_id'] IS NOT NULL
+), ordered_events AS (
+    SELECT
+        workspace_id,
+        cluster_id,
+        event_time,
+        action_name,
+        LEAD(event_time) OVER (
+            PARTITION BY workspace_id, cluster_id
+            ORDER BY event_time
+        ) AS next_event_time,
+        LEAD(action_name) OVER (
+            PARTITION BY workspace_id, cluster_id
+            ORDER BY event_time
+        ) AS next_action,
+        LEAD(termination_reason) OVER (
+            PARTITION BY workspace_id, cluster_id
+            ORDER BY event_time
+        ) AS next_termination_reason
+    FROM lifecycle_events
+)
+SELECT
+    e.workspace_id,
+    i.workspace_name,
+    i.workspace_label,
+    COALESCE(i.team_scope, 'Unmapped') AS team_scope,
+    e.cluster_id,
+    i.cluster_name,
+    i.owner,
+    'DEDICATED' AS cluster_type,
+    e.event_time AS run_start,
+    e.next_event_time AS run_end,
+    DATE(e.event_time) AS event_date,
+    ROUND(TIMESTAMPDIFF(SECOND, e.event_time, e.next_event_time) / 60.0, 2) AS run_duration_minutes,
+    e.next_action AS end_event,
+    e.next_termination_reason AS termination_reason
+FROM ordered_events e
+LEFT JOIN {TARGET}.v_cluster_inventory i
+  ON e.workspace_id = i.workspace_id
+ AND e.cluster_id = i.cluster_id
+WHERE e.action_name IN ('start', 'restart')
+  AND e.next_action IN ('restart', 'delete')
+  AND e.next_event_time IS NOT NULL
+""")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 6. Unified job + pipeline run fact
+# MAGIC One semantic view for job/pipeline runtime analysis.
+
+# COMMAND ----------
+# First validate pipeline system tables. The current Databricks system-table model includes
+# system.lakeflow.pipelines and system.lakeflow.pipeline_update_timeline.
+pipeline_tables_available = True
+try:
+    spark.sql("SELECT pipeline_id FROM system.lakeflow.pipelines LIMIT 1").collect()
+    spark.sql("SELECT pipeline_id FROM system.lakeflow.pipeline_update_timeline LIMIT 1").collect()
+except Exception as exc:
+    pipeline_tables_available = False
+    print("Pipeline system tables are not available in this workspace/region.")
+    print(str(exc)[:300])
+
+# COMMAND ----------
+job_sql = f"""
+WITH latest_jobs AS (
+    SELECT
+        CAST(workspace_id AS STRING) AS workspace_id,
+        job_id,
+        name AS workload_name,
+        run_as AS owner,
+        tags,
+        ROW_NUMBER() OVER (
+            PARTITION BY workspace_id, job_id
+            ORDER BY change_time DESC
+        ) AS rn
+    FROM system.lakeflow.jobs
+), run_slices AS (
+    SELECT
+        CAST(workspace_id AS STRING) AS workspace_id,
+        job_id,
+        run_id,
+        MIN(period_start_time) AS run_start,
+        MAX(period_end_time) AS run_end,
+        MAX_BY(run_name, period_end_time) AS run_name,
+        MAX_BY(trigger_type, period_end_time) AS trigger_type,
+        MAX_BY(run_type, period_end_time) AS run_type,
+        MAX_BY(result_state, period_end_time) AS result_state,
+        MAX_BY(termination_code, period_end_time) AS termination_code
+    FROM system.lakeflow.job_run_timeline
+    WHERE period_start_time >= CURRENT_TIMESTAMP() - INTERVAL {HISTORY_DAYS} DAYS
+    GROUP BY workspace_id, job_id, run_id
+), base AS (
+    SELECT
+        r.workspace_id,
+        w.workspace_name,
+        w.workspace_label,
+        'JOB' AS workload_type,
+        CAST(r.job_id AS STRING) AS workload_id,
+        COALESCE(j.workload_name, CONCAT('Job ', CAST(r.job_id AS STRING))) AS workload_name,
+        j.owner,
+        CAST(r.run_id AS STRING) AS run_id,
+        r.run_name,
+        r.trigger_type,
+        r.run_type AS execution_type,
+        r.result_state,
+        r.termination_code,
+        r.run_start,
+        r.run_end,
+        DATE(r.run_start) AS event_date,
+        ROUND(TIMESTAMPDIFF(SECOND, r.run_start, r.run_end) / 60.0, 2) AS run_duration_minutes
+    FROM run_slices r
+    LEFT JOIN latest_jobs j
+      ON r.workspace_id = j.workspace_id
+     AND r.job_id = j.job_id
+     AND j.rn = 1
+    LEFT JOIN {TARGET}.v_workspace_dim w
+      ON r.workspace_id = w.workspace_id
+    WHERE r.run_end IS NOT NULL
+), mapped AS (
+    SELECT
+        b.*,
+        m.scope_name,
+        ROW_NUMBER() OVER (
+            PARTITION BY b.workspace_id, b.workload_type, b.workload_id, b.run_id
+            ORDER BY
+                CASE m.match_type
+                    WHEN 'JOB' THEN 3
+                    WHEN 'OWNER' THEN 2
+                    WHEN 'WORKSPACE' THEN 1
+                    ELSE 0
+                END DESC,
+                COALESCE(m.priority, 0) DESC
+        ) AS map_rn
+    FROM base b
+    LEFT JOIN {TARGET}.compute_team_scope_map m
+      ON m.active = TRUE
+     AND (
+            (UPPER(m.match_type) = 'JOB' AND m.match_value = b.workload_id)
+         OR (UPPER(m.match_type) = 'OWNER' AND LOWER(m.match_value) = LOWER(COALESCE(b.owner, '')))
+         OR (UPPER(m.match_type) = 'WORKSPACE' AND m.match_value = b.workspace_id)
+     )
+)
+SELECT
+    workspace_id,
+    workspace_name,
+    workspace_label,
+    COALESCE(scope_name, 'Unmapped') AS team_scope,
+    workload_type,
+    workload_id,
+    workload_name,
+    owner,
+    run_id,
+    run_name,
+    trigger_type,
+    execution_type,
+    result_state,
+    termination_code,
+    run_start,
+    run_end,
+    event_date,
+    run_duration_minutes
+FROM mapped
+WHERE map_rn = 1
+"""
+
+if pipeline_tables_available:
+    pipeline_sql = f"""
+    WITH latest_pipelines AS (
+        SELECT
+            CAST(workspace_id AS STRING) AS workspace_id,
+            pipeline_id,
+            pipeline_type,
+            name AS workload_name,
+            run_as AS owner,
+            ROW_NUMBER() OVER (
+                PARTITION BY workspace_id, pipeline_id
+                ORDER BY change_time DESC
+            ) AS rn
+        FROM system.lakeflow.pipelines
+    ), run_slices AS (
+        SELECT
+            CAST(workspace_id AS STRING) AS workspace_id,
+            pipeline_id,
+            update_id,
+            MIN(period_start_time) AS run_start,
+            MAX(period_end_time) AS run_end,
+            MAX_BY(update_type, period_end_time) AS update_type,
+            MAX_BY(trigger_type, period_end_time) AS trigger_type,
+            MAX_BY(result_state, period_end_time) AS result_state,
+            MAX_BY(run_as_user_name, period_end_time) AS run_as_user_name
+        FROM system.lakeflow.pipeline_update_timeline
+        WHERE period_start_time >= CURRENT_TIMESTAMP() - INTERVAL {HISTORY_DAYS} DAYS
+        GROUP BY workspace_id, pipeline_id, update_id
+    ), base AS (
+        SELECT
+            r.workspace_id,
+            w.workspace_name,
+            w.workspace_label,
+            'PIPELINE' AS workload_type,
+            CAST(r.pipeline_id AS STRING) AS workload_id,
+            COALESCE(p.workload_name, CONCAT('Pipeline ', CAST(r.pipeline_id AS STRING))) AS workload_name,
+            COALESCE(p.owner, r.run_as_user_name) AS owner,
+            CAST(r.update_id AS STRING) AS run_id,
+            CAST(NULL AS STRING) AS run_name,
+            r.trigger_type,
+            COALESCE(r.update_type, p.pipeline_type) AS execution_type,
+            r.result_state,
+            CAST(NULL AS STRING) AS termination_code,
+            r.run_start,
+            r.run_end,
+            DATE(r.run_start) AS event_date,
+            ROUND(TIMESTAMPDIFF(SECOND, r.run_start, r.run_end) / 60.0, 2) AS run_duration_minutes
+        FROM run_slices r
+        LEFT JOIN latest_pipelines p
+          ON r.workspace_id = p.workspace_id
+         AND r.pipeline_id = p.pipeline_id
+         AND p.rn = 1
+        LEFT JOIN {TARGET}.v_workspace_dim w
+          ON r.workspace_id = w.workspace_id
+        WHERE r.run_end IS NOT NULL
+    ), mapped AS (
+        SELECT
+            b.*,
+            m.scope_name,
+            ROW_NUMBER() OVER (
+                PARTITION BY b.workspace_id, b.workload_type, b.workload_id, b.run_id
+                ORDER BY
+                    CASE m.match_type
+                        WHEN 'PIPELINE' THEN 3
+                        WHEN 'OWNER' THEN 2
+                        WHEN 'WORKSPACE' THEN 1
+                        ELSE 0
+                    END DESC,
+                    COALESCE(m.priority, 0) DESC
+            ) AS map_rn
+        FROM base b
+        LEFT JOIN {TARGET}.compute_team_scope_map m
+          ON m.active = TRUE
+         AND (
+                (UPPER(m.match_type) = 'PIPELINE' AND m.match_value = b.workload_id)
+             OR (UPPER(m.match_type) = 'OWNER' AND LOWER(m.match_value) = LOWER(COALESCE(b.owner, '')))
+             OR (UPPER(m.match_type) = 'WORKSPACE' AND m.match_value = b.workspace_id)
+         )
+    )
+    SELECT
+        workspace_id,
+        workspace_name,
+        workspace_label,
+        COALESCE(scope_name, 'Unmapped') AS team_scope,
+        workload_type,
+        workload_id,
+        workload_name,
+        owner,
+        run_id,
+        run_name,
+        trigger_type,
+        execution_type,
+        result_state,
+        termination_code,
+        run_start,
+        run_end,
+        event_date,
+        run_duration_minutes
+    FROM mapped
+    WHERE map_rn = 1
+    """
+    spark.sql(f"CREATE OR REPLACE VIEW {TARGET}.v_workload_runs AS {job_sql} UNION ALL {pipeline_sql}")
+else:
+    spark.sql(f"CREATE OR REPLACE VIEW {TARGET}.v_workload_runs AS {job_sql}")
+
+# Backward-compatible job-only view for anything still using the old name.
+spark.sql(f"""
+CREATE OR REPLACE VIEW {TARGET}.v_job_run_duration AS
+SELECT
+    workspace_id,
+    workload_id AS job_id,
+    run_id,
+    run_start,
+    run_end,
+    run_duration_minutes
+FROM {TARGET}.v_workload_runs
+WHERE workload_type = 'JOB'
+""")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 7. Dashboard overview fact
+# MAGIC A compact dataset for KPI cards and high-level distributions.
+
+# COMMAND ----------
+spark.sql(f"""
+CREATE OR REPLACE VIEW {TARGET}.v_compute_dashboard_overview AS
+SELECT
+    workspace_id,
+    workspace_name,
+    workspace_label,
+    team_scope,
+    cluster_id,
+    cluster_name,
+    owner,
+    cluster_type,
+    cluster_family,
+    configured_workers,
+    create_time,
+    delete_time
+FROM {TARGET}.v_cluster_inventory
+""")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 8. Validation
+
+# COMMAND ----------
+validation_df = spark.sql(f"""
+SELECT 'v_workspace_dim' AS object_name, COUNT(*) AS row_count FROM {TARGET}.v_workspace_dim
+UNION ALL
+SELECT 'v_cluster_inventory', COUNT(*) FROM {TARGET}.v_cluster_inventory
+UNION ALL
+SELECT 'v_cluster_node_usage', COUNT(*) FROM {TARGET}.v_cluster_node_usage
+UNION ALL
+SELECT 'v_cluster_sessions', COUNT(*) FROM {TARGET}.v_cluster_sessions
+UNION ALL
+SELECT 'v_workload_runs', COUNT(*) FROM {TARGET}.v_workload_runs
+UNION ALL
+SELECT 'compute_team_scope_map', COUNT(*) FROM {TARGET}.compute_team_scope_map
+""")
+display(validation_df)
+
+# COMMAND ----------
+# Useful coverage check before building the dashboard.
+scope_coverage_df = spark.sql(f"""
+SELECT
+    'CLUSTERS' AS source,
+    team_scope,
+    COUNT(*) AS records
+FROM {TARGET}.v_cluster_inventory
+GROUP BY team_scope
+UNION ALL
+SELECT
+    'WORKLOAD_RUNS' AS source,
+    team_scope,
+    COUNT(*) AS records
+FROM {TARGET}.v_workload_runs
+GROUP BY team_scope
+ORDER BY source, records DESC
+""")
+display(scope_coverage_df)
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## Next step: AI/BI dashboard
+# MAGIC
+# MAGIC Build the dashboard directly on these semantic views. Recommended global filters:
+# MAGIC
+# MAGIC 1. **Team Scope** → `team_scope` (default `Data Science` after mapping is populated)
+# MAGIC 2. **Workspace** → `workspace_label` (multi-select)
+# MAGIC 3. **Date / Period** → `event_date` or `run_start`
+# MAGIC 4. **Workload Type** → `workload_type` (`JOB`, `PIPELINE`)
+# MAGIC 5. **Cluster Type** → `cluster_type` (`JOB`, `DEDICATED`) where relevant
+-- Compute Monitoring V2 — AI/BI Dashboard dataset queries
+-- Replace <catalog>.<schema> once per environment, or use the dashboard's dataset editor.
+
+-- ============================================================
+-- DATASET 1: Executive KPI / cluster estate
+-- ============================================================
+SELECT *
+FROM <catalog>.<schema>.v_compute_dashboard_overview;
+
+-- Recommended visuals:
+-- Total clusters, Job clusters, Dedicated clusters, Workspaces,
+-- configured workers, cluster family distribution.
+
+-- ============================================================
+-- DATASET 2: Actual worker usage / capacity trends
+-- ============================================================
+SELECT
+  workspace_id,
+  workspace_name,
+  workspace_label,
+  team_scope,
+  cluster_id,
+  cluster_name,
+  cluster_type,
+  cluster_family,
+  instance_id,
+  driver,
+  start_time,
+  end_time,
+  event_date,
+  usage_hour,
+  usage_minute
+FROM <catalog>.<schema>.v_cluster_node_usage
+WHERE driver = FALSE;
+
+-- Recommended visuals:
+-- Worker instances over time
+-- Worker family over time
+-- Average instances/day
+-- Peak workers by workspace
+-- Top 5 biggest clusters
+
+-- ============================================================
+-- DATASET 3: Job + pipeline runs
+-- ============================================================
+SELECT
+  workspace_id,
+  workspace_name,
+  workspace_label,
+  team_scope,
+  workload_type,
+  workload_id,
+  workload_name,
+  owner,
+  run_id,
+  run_name,
+  trigger_type,
+  execution_type,
+  result_state,
+  termination_code,
+  run_start,
+  run_end,
+  event_date,
+  run_duration_minutes
+FROM <catalog>.<schema>.v_workload_runs;
+
+-- Recommended visuals:
+-- Run count by Job vs Pipeline
+-- Average runtime trend
+-- P95 runtime by workload
+-- Success / failure distribution
+-- Top 5 longest runs
+-- Workload detail table
+
+-- ============================================================
+-- DATASET 4: Dedicated/reusable cluster sessions
+-- ============================================================
+SELECT *
+FROM <catalog>.<schema>.v_cluster_sessions;
+
+-- Recommended visuals:
+-- Average dedicated uptime
+-- Longest dedicated sessions
+-- Uptime trend by workspace
+
+-- ============================================================
+-- GLOBAL FILTER FIELD MAPPING
+-- ============================================================
+-- Team Scope      -> team_scope
+-- Workspace       -> workspace_label
+-- Time            -> event_date / run_start
+-- Workload Type   -> workload_type (workload dataset only)
+-- Cluster Type    -> cluster_type (compute datasets)
+--
+-- IMPORTANT:
+-- AI/BI filters can target the corresponding field across multiple datasets.
+-- Keep the field names above consistent so filter configuration stays simple.
+
+        </p>
         
       </h3>
 
