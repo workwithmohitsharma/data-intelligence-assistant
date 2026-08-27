@@ -2705,6 +2705,533 @@
         selected Databricks views and 10–20 real stakeholder questions.
         <p>
           codeloop
+          # Databricks notebook source
+# MAGIC %md
+# MAGIC # Compute & Workload Monitoring — V2 Backend
+# MAGIC
+# MAGIC Lean backend for the AI/BI dashboard.
+# MAGIC
+# MAGIC **Design:**
+# MAGIC - Reuses the existing catalog/schema.
+# MAGIC - Creates views only — no new catalogs, schemas, or physical tables.
+# MAGIC - Reads directly from Databricks system tables.
+# MAGIC - Adds workspace names, 365-day history, Jobs + Pipelines, and a team_scope field.
+# MAGIC - Global filtering is configured in the AI/BI dashboard, not with dbutils widgets.
+
+# COMMAND ----------
+# ============================================================
+# 0. CONFIGURATION — only change these when moving environments
+# ============================================================
+CATALOG = "sandbox_tmp"
+SCHEMA = "msharma"
+
+# System-table retention for Lakeflow activity is currently 365 days.
+HISTORY_DAYS = 365
+
+# PoC capacity threshold. Replace with authoritative quota later.
+QUOTA_LIMIT = 500
+
+# Team classifier used only when tags contain a value such as
+# "Data Science", "data-science", or "data_science".
+TEAM_REGEX = r"data[ _-]?science"
+
+TARGET = f"{CATALOG}.{SCHEMA}"
+
+print(f"Target: {TARGET}")
+print(f"History: {HISTORY_DAYS} days")
+print(f"PoC quota threshold: {QUOTA_LIMIT}")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 1. Workspace dimension
+# MAGIC Gives every dashboard dataset a friendly workspace label.
+
+# COMMAND ----------
+spark.sql(f"""
+CREATE OR REPLACE VIEW {TARGET}.v_workspace_dim AS
+SELECT
+    CAST(workspace_id AS STRING) AS workspace_id,
+    workspace_name,
+    workspace_url,
+    status,
+    CONCAT(CAST(workspace_id AS STRING), ' (', COALESCE(workspace_name, 'Unknown'), ')') AS workspace_label
+FROM system.access.workspaces_latest
+""")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 2. Cluster inventory
+# MAGIC Latest configuration for each cluster, enriched with workspace name and team scope.
+
+# COMMAND ----------
+spark.sql(f"""
+CREATE OR REPLACE VIEW {TARGET}.v_cluster_inventory AS
+WITH latest_cluster_config AS (
+    SELECT
+        CAST(c.workspace_id AS STRING) AS workspace_id,
+        c.cluster_id,
+        c.cluster_name,
+        c.owned_by AS owner,
+        c.cluster_source,
+        c.driver_node_type,
+        c.worker_node_type,
+        c.worker_count,
+        c.min_autoscale_workers,
+        c.max_autoscale_workers,
+        c.auto_termination_minutes,
+        c.tags,
+        c.create_time,
+        c.delete_time,
+        c.change_time,
+        ROW_NUMBER() OVER (
+            PARTITION BY c.workspace_id, c.cluster_id
+            ORDER BY c.change_time DESC
+        ) AS rn
+    FROM system.compute.clusters c
+)
+SELECT
+    c.workspace_id,
+    w.workspace_name,
+    COALESCE(w.workspace_label, c.workspace_id) AS workspace_label,
+    c.cluster_id,
+    c.cluster_name,
+    c.owner,
+    c.cluster_source,
+    CASE
+        WHEN c.cluster_source = 'JOB' THEN 'JOB'
+        WHEN c.cluster_source IN ('PIPELINE', 'PIPELINE_MAINTENANCE') THEN 'PIPELINE'
+        ELSE 'DEDICATED'
+    END AS cluster_type,
+    c.driver_node_type,
+    c.worker_node_type AS cluster_family,
+    c.worker_count,
+    c.min_autoscale_workers,
+    c.max_autoscale_workers,
+    COALESCE(c.worker_count, c.max_autoscale_workers) AS configured_workers,
+    c.auto_termination_minutes,
+    c.tags,
+    CASE
+        WHEN LOWER(ARRAY_JOIN(MAP_VALUES(COALESCE(c.tags, CAST(map() AS MAP<STRING, STRING>))), ' ')) RLIKE '{TEAM_REGEX}'
+            THEN 'Data Science'
+        ELSE 'Other / Unclassified'
+    END AS team_scope,
+    c.create_time,
+    c.delete_time,
+    c.change_time
+FROM latest_cluster_config c
+LEFT JOIN {TARGET}.v_workspace_dim w
+    ON c.workspace_id = w.workspace_id
+WHERE c.rn = 1
+""")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 3. Worker / instance usage
+# MAGIC Minute/hour/day worker history, enriched with cluster and workspace metadata.
+
+# COMMAND ----------
+spark.sql(f"""
+CREATE OR REPLACE VIEW {TARGET}.v_cluster_node_usage AS
+SELECT
+    CAST(n.workspace_id AS STRING) AS workspace_id,
+    i.workspace_name,
+    COALESCE(i.workspace_label, CAST(n.workspace_id AS STRING)) AS workspace_label,
+    n.cluster_id,
+    i.cluster_name,
+    i.owner,
+    i.cluster_type,
+    i.team_scope,
+    n.instance_id,
+    n.node_type,
+    n.driver,
+    n.start_time,
+    n.end_time,
+    DATE(n.start_time) AS usage_date,
+    DATE_TRUNC('HOUR', n.start_time) AS usage_hour,
+    DATE_TRUNC('MINUTE', n.start_time) AS usage_minute
+FROM system.compute.node_timeline n
+LEFT JOIN {TARGET}.v_cluster_inventory i
+    ON CAST(n.workspace_id AS STRING) = i.workspace_id
+   AND n.cluster_id = i.cluster_id
+WHERE n.start_time >= CURRENT_TIMESTAMP() - INTERVAL {HISTORY_DAYS} DAYS
+""")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 4. Unified Job + Pipeline runs
+# MAGIC One row per completed/observed Job run or Pipeline update.
+
+# COMMAND ----------
+spark.sql(f"""
+CREATE OR REPLACE VIEW {TARGET}.v_workload_runs AS
+WITH latest_jobs AS (
+    SELECT * EXCEPT(rn)
+    FROM (
+        SELECT
+            CAST(workspace_id AS STRING) AS workspace_id,
+            CAST(job_id AS STRING) AS job_id,
+            name AS job_name,
+            tags,
+            change_time,
+            delete_time,
+            ROW_NUMBER() OVER (
+                PARTITION BY workspace_id, job_id
+                ORDER BY change_time DESC
+            ) AS rn
+        FROM system.lakeflow.jobs
+    )
+    WHERE rn = 1
+),
+job_runs AS (
+    SELECT
+        CAST(workspace_id AS STRING) AS workspace_id,
+        CAST(job_id AS STRING) AS job_id,
+        CAST(run_id AS STRING) AS run_id,
+        MIN(period_start_time) AS run_start,
+        MAX(period_end_time) AS run_end,
+        MAX_BY(trigger_type, period_end_time) AS trigger_type,
+        MAX_BY(run_type, period_end_time) AS run_type,
+        MAX_BY(run_name, period_end_time) AS run_name,
+        MAX_BY(result_state, period_end_time) FILTER (WHERE result_state IS NOT NULL) AS result_state
+    FROM system.lakeflow.job_run_timeline
+    WHERE period_start_time >= CURRENT_TIMESTAMP() - INTERVAL {HISTORY_DAYS} DAYS
+    GROUP BY workspace_id, job_id, run_id
+),
+latest_pipelines AS (
+    SELECT * EXCEPT(rn)
+    FROM (
+        SELECT
+            CAST(workspace_id AS STRING) AS workspace_id,
+            CAST(pipeline_id AS STRING) AS pipeline_id,
+            name AS pipeline_name,
+            created_by,
+            run_as,
+            pipeline_type,
+            tags,
+            change_time,
+            delete_time,
+            ROW_NUMBER() OVER (
+                PARTITION BY workspace_id, pipeline_id
+                ORDER BY change_time DESC
+            ) AS rn
+        FROM system.lakeflow.pipelines
+    )
+    WHERE rn = 1
+),
+pipeline_runs AS (
+    SELECT
+        CAST(workspace_id AS STRING) AS workspace_id,
+        CAST(pipeline_id AS STRING) AS pipeline_id,
+        CAST(update_id AS STRING) AS update_id,
+        MIN(period_start_time) AS run_start,
+        MAX(period_end_time) AS run_end,
+        MAX_BY(update_type, period_end_time) AS update_type,
+        MAX_BY(trigger_type, period_end_time) AS trigger_type,
+        MAX_BY(run_as_user_name, period_end_time) AS run_as_user_name,
+        MAX_BY(result_state, period_end_time) FILTER (WHERE result_state IS NOT NULL) AS result_state
+    FROM system.lakeflow.pipeline_update_timeline
+    WHERE period_start_time >= CURRENT_TIMESTAMP() - INTERVAL {HISTORY_DAYS} DAYS
+    GROUP BY workspace_id, pipeline_id, update_id
+),
+job_output AS (
+    SELECT
+        r.workspace_id,
+        w.workspace_name,
+        COALESCE(w.workspace_label, r.workspace_id) AS workspace_label,
+        'JOB' AS workload_type,
+        r.job_id AS workload_id,
+        r.run_id,
+        COALESCE(j.job_name, r.run_name, CONCAT('Job ', r.job_id)) AS workload_name,
+        r.run_name,
+        CAST(NULL AS STRING) AS owner,
+        r.trigger_type,
+        r.run_type AS run_subtype,
+        r.result_state,
+        r.run_start,
+        r.run_end,
+        ROUND(TIMESTAMPDIFF(SECOND, r.run_start, r.run_end) / 60.0, 2) AS run_duration_minutes,
+        j.tags,
+        CASE
+            WHEN LOWER(ARRAY_JOIN(MAP_VALUES(COALESCE(j.tags, CAST(map() AS MAP<STRING, STRING>))), ' ')) RLIKE '{TEAM_REGEX}'
+                THEN 'Data Science'
+            ELSE 'Other / Unclassified'
+        END AS team_scope
+    FROM job_runs r
+    LEFT JOIN latest_jobs j
+        ON r.workspace_id = j.workspace_id
+       AND r.job_id = j.job_id
+    LEFT JOIN {TARGET}.v_workspace_dim w
+        ON r.workspace_id = w.workspace_id
+),
+pipeline_output AS (
+    SELECT
+        r.workspace_id,
+        w.workspace_name,
+        COALESCE(w.workspace_label, r.workspace_id) AS workspace_label,
+        'PIPELINE' AS workload_type,
+        r.pipeline_id AS workload_id,
+        r.update_id AS run_id,
+        COALESCE(p.pipeline_name, CONCAT('Pipeline ', r.pipeline_id)) AS workload_name,
+        CAST(NULL AS STRING) AS run_name,
+        COALESCE(r.run_as_user_name, p.run_as, p.created_by) AS owner,
+        r.trigger_type,
+        COALESCE(r.update_type, p.pipeline_type) AS run_subtype,
+        r.result_state,
+        r.run_start,
+        r.run_end,
+        ROUND(TIMESTAMPDIFF(SECOND, r.run_start, r.run_end) / 60.0, 2) AS run_duration_minutes,
+        p.tags,
+        CASE
+            WHEN LOWER(ARRAY_JOIN(MAP_VALUES(COALESCE(p.tags, CAST(map() AS MAP<STRING, STRING>))), ' ')) RLIKE '{TEAM_REGEX}'
+                THEN 'Data Science'
+            ELSE 'Other / Unclassified'
+        END AS team_scope
+    FROM pipeline_runs r
+    LEFT JOIN latest_pipelines p
+        ON r.workspace_id = p.workspace_id
+       AND r.pipeline_id = p.pipeline_id
+    LEFT JOIN {TARGET}.v_workspace_dim w
+        ON r.workspace_id = w.workspace_id
+)
+SELECT * FROM job_output
+UNION ALL
+SELECT * FROM pipeline_output
+""")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 5. Dedicated / reusable cluster sessions
+
+# COMMAND ----------
+spark.sql(f"""
+CREATE OR REPLACE VIEW {TARGET}.v_cluster_sessions AS
+WITH lifecycle_events AS (
+    SELECT
+        CAST(workspace_id AS STRING) AS workspace_id,
+        request_params['cluster_id'] AS cluster_id,
+        event_time,
+        action_name,
+        request_params['termination_reason'] AS raw_termination_reason
+    FROM system.access.audit
+    WHERE service_name = 'clusters'
+      AND action_name IN ('start', 'restart', 'delete')
+      AND event_time >= CURRENT_TIMESTAMP() - INTERVAL {HISTORY_DAYS} DAYS
+      AND request_params['cluster_id'] IS NOT NULL
+),
+ordered_events AS (
+    SELECT
+        workspace_id,
+        cluster_id,
+        event_time,
+        action_name,
+        LEAD(event_time) OVER (
+            PARTITION BY workspace_id, cluster_id ORDER BY event_time
+        ) AS next_event_time,
+        LEAD(action_name) OVER (
+            PARTITION BY workspace_id, cluster_id ORDER BY event_time
+        ) AS next_action,
+        LEAD(raw_termination_reason) OVER (
+            PARTITION BY workspace_id, cluster_id ORDER BY event_time
+        ) AS termination_reason
+    FROM lifecycle_events
+)
+SELECT
+    e.workspace_id,
+    i.workspace_name,
+    COALESCE(i.workspace_label, e.workspace_id) AS workspace_label,
+    e.cluster_id,
+    i.cluster_name,
+    i.owner,
+    i.team_scope,
+    e.event_time AS run_start,
+    e.next_event_time AS run_end,
+    ROUND(TIMESTAMPDIFF(SECOND, e.event_time, e.next_event_time) / 60.0, 2) AS run_duration_minutes,
+    e.next_action AS end_event,
+    e.termination_reason
+FROM ordered_events e
+LEFT JOIN {TARGET}.v_cluster_inventory i
+    ON e.workspace_id = i.workspace_id
+   AND e.cluster_id = i.cluster_id
+WHERE e.action_name IN ('start', 'restart')
+  AND e.next_action IN ('restart', 'delete')
+  AND e.next_event_time IS NOT NULL
+  AND COALESCE(i.cluster_type, 'DEDICATED') = 'DEDICATED'
+""")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 6. Compatibility view
+# MAGIC Keeps the original `v_job_run_duration` name available for anything already using it.
+
+# COMMAND ----------
+spark.sql(f"""
+CREATE OR REPLACE VIEW {TARGET}.v_job_run_duration AS
+SELECT
+    workspace_id,
+    workload_id AS job_id,
+    run_id,
+    run_start,
+    run_end,
+    run_duration_minutes
+FROM {TARGET}.v_workload_runs
+WHERE workload_type = 'JOB'
+""")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 7. Dashboard-ready aggregates
+# MAGIC These are still views, not tables. They simplify the AI/BI datasets and make filters consistent.
+
+# COMMAND ----------
+spark.sql(f"""
+CREATE OR REPLACE VIEW {TARGET}.v_compute_daily_trend AS
+SELECT
+    usage_date,
+    workspace_id,
+    workspace_name,
+    workspace_label,
+    team_scope,
+    node_type AS cluster_family,
+    COUNT(DISTINCT CASE WHEN driver = FALSE THEN instance_id END) AS worker_instances,
+    COUNT(DISTINCT cluster_id) AS active_clusters
+FROM {TARGET}.v_cluster_node_usage
+GROUP BY usage_date, workspace_id, workspace_name, workspace_label, team_scope, node_type
+""")
+
+spark.sql(f"""
+CREATE OR REPLACE VIEW {TARGET}.v_workload_daily_trend AS
+SELECT
+    DATE(run_start) AS run_date,
+    workspace_id,
+    workspace_name,
+    workspace_label,
+    team_scope,
+    workload_type,
+    workload_id,
+    workload_name,
+    COUNT(DISTINCT run_id) AS run_count,
+    ROUND(AVG(run_duration_minutes), 2) AS avg_run_minutes,
+    ROUND(PERCENTILE(run_duration_minutes, 0.95), 2) AS p95_run_minutes,
+    MAX(run_duration_minutes) AS max_run_minutes,
+    SUM(CASE WHEN result_state IN ('SUCCEEDED', 'SUCCESS', 'COMPLETED') THEN 1 ELSE 0 END) AS successful_runs,
+    SUM(CASE WHEN result_state IS NOT NULL AND result_state NOT IN ('SUCCEEDED', 'SUCCESS', 'COMPLETED') THEN 1 ELSE 0 END) AS non_success_runs
+FROM {TARGET}.v_workload_runs
+GROUP BY DATE(run_start), workspace_id, workspace_name, workspace_label,
+         team_scope, workload_type, workload_id, workload_name
+""")
+
+spark.sql(f"""
+CREATE OR REPLACE VIEW {TARGET}.v_capacity_daily_peak AS
+WITH minute_usage AS (
+    SELECT
+        usage_date,
+        workspace_id,
+        workspace_name,
+        workspace_label,
+        team_scope,
+        usage_minute,
+        COUNT(DISTINCT instance_id) AS workers
+    FROM {TARGET}.v_cluster_node_usage
+    WHERE driver = FALSE
+    GROUP BY usage_date, workspace_id, workspace_name, workspace_label, team_scope, usage_minute
+)
+SELECT
+    usage_date,
+    workspace_id,
+    workspace_name,
+    workspace_label,
+    team_scope,
+    MAX(workers) AS peak_workers,
+    {QUOTA_LIMIT} AS quota_limit,
+    ROUND(MAX(workers) / {float(QUOTA_LIMIT)} * 100, 2) AS quota_usage_pct
+FROM minute_usage
+GROUP BY usage_date, workspace_id, workspace_name, workspace_label, team_scope
+""")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 8. Validation
+
+# COMMAND ----------
+validation_df = spark.sql(f"""
+SELECT 'v_workspace_dim' AS view_name, COUNT(*) AS row_count FROM {TARGET}.v_workspace_dim
+UNION ALL
+SELECT 'v_cluster_inventory', COUNT(*) FROM {TARGET}.v_cluster_inventory
+UNION ALL
+SELECT 'v_cluster_node_usage', COUNT(*) FROM {TARGET}.v_cluster_node_usage
+UNION ALL
+SELECT 'v_workload_runs', COUNT(*) FROM {TARGET}.v_workload_runs
+UNION ALL
+SELECT 'v_cluster_sessions', COUNT(*) FROM {TARGET}.v_cluster_sessions
+UNION ALL
+SELECT 'v_compute_daily_trend', COUNT(*) FROM {TARGET}.v_compute_daily_trend
+UNION ALL
+SELECT 'v_workload_daily_trend', COUNT(*) FROM {TARGET}.v_workload_daily_trend
+UNION ALL
+SELECT 'v_capacity_daily_peak', COUNT(*) FROM {TARGET}.v_capacity_daily_peak
+ORDER BY view_name
+""")
+display(validation_df)
+
+# COMMAND ----------
+# Check how much of the estate is currently identified as Data Science from tags.
+team_coverage_df = spark.sql(f"""
+SELECT source, team_scope, COUNT(*) AS records
+FROM (
+    SELECT 'CLUSTERS' AS source, team_scope FROM {TARGET}.v_cluster_inventory
+    UNION ALL
+    SELECT 'WORKLOAD_RUNS' AS source, team_scope FROM {TARGET}.v_workload_runs
+)
+GROUP BY source, team_scope
+ORDER BY source, team_scope
+""")
+display(team_coverage_df)
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## AI/BI Dashboard global filters
+# MAGIC Configure these controls in the dashboard and connect them to every applicable visualization:
+# MAGIC
+# MAGIC 1. **Team / Scope** → `team_scope` (default: `Data Science`; users can clear/select All)
+# MAGIC 2. **Workspace** → `workspace_label`
+# MAGIC 3. **Date range** → `usage_date`, `run_date`, or `run_start` depending on dataset
+# MAGIC 4. **Workload Type** → `workload_type` (`JOB`, `PIPELINE`) for workload visuals
+# MAGIC
+# MAGIC Do not add notebook widgets for these. The AI/BI dashboard owns the interaction.
+
+              -- ================================================================
+-- AI/BI DASHBOARD DATASETS
+-- Replace sandbox_tmp.msharma only if you deploy to another target.
+-- ================================================================
+
+-- DATASET 1: Cluster inventory / KPI cards / cluster distribution
+SELECT *
+FROM sandbox_tmp.msharma.v_cluster_inventory;
+
+-- DATASET 2: Worker usage history / family trends / biggest clusters
+SELECT *
+FROM sandbox_tmp.msharma.v_cluster_node_usage;
+
+-- DATASET 3: Daily compute trend
+SELECT *
+FROM sandbox_tmp.msharma.v_compute_daily_trend;
+
+-- DATASET 4: Job + Pipeline detail / runtime metrics / longest workloads
+SELECT *
+FROM sandbox_tmp.msharma.v_workload_runs;
+
+-- DATASET 5: Job + Pipeline trend
+SELECT *
+FROM sandbox_tmp.msharma.v_workload_daily_trend;
+
+-- DATASET 6: Dedicated reusable cluster sessions
+SELECT *
+FROM sandbox_tmp.msharma.v_cluster_sessions;
+
+-- DATASET 7: Capacity / quota history
+SELECT *
+FROM sandbox_tmp.msharma.v_capacity_daily_peak;
+
         </p>
         
       </h3>
