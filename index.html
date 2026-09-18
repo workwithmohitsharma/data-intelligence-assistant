@@ -3172,7 +3172,29 @@
 <p>
 
 
-            
+          SELECT
+    nt.workspace_id,
+    w.workspace_name,
+    nt.node_type,
+    COUNT(DISTINCT nt.instance_id) AS instances,
+    n.core_count AS vcpus_per_node,
+    COUNT(DISTINCT nt.instance_id) * n.core_count AS vcpus,
+    MIN(nt.start_time) AS first_seen,
+    MAX(nt.start_time) AS last_seen
+FROM system.compute.node_timeline nt
+LEFT JOIN system.compute.node_types n
+    ON nt.account_id = n.account_id
+   AND nt.node_type = n.node_type
+LEFT JOIN system.access.workspaces_latest w
+    ON nt.workspace_id = w.workspace_id
+WHERE nt.start_time >= CURRENT_TIMESTAMP() - INTERVAL 24 HOURS
+  AND nt.node_type RLIKE '^Standard_D[0-9]+ads_v6$'
+GROUP BY
+    nt.workspace_id,
+    w.workspace_name,
+    nt.node_type,
+    n.core_count
+ORDER BY vcpus DESC;  
 
 </p>
 </body>
