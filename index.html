@@ -2812,6 +2812,13 @@ WITH workspace_env AS (
         CASE
             WHEN LOWER(workspace_name) LIKE '%nonprod%'
                 THEN 'Non-Prod'
+WITH workspace_env AS (
+    SELECT
+        workspace_id,
+        workspace_name,
+        CASE
+            WHEN LOWER(workspace_name) LIKE '%nonprod%'
+                THEN 'Non-Prod'
             WHEN LOWER(workspace_name) LIKE '%non-prod%'
                 THEN 'Non-Prod'
             WHEN LOWER(workspace_name) LIKE '%prod%'
